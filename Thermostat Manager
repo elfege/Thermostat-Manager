@@ -215,12 +215,12 @@ def appButtonHandler(btn) {
         }
         else
         {
-            initialize()            
+            updated()            
             break
         }
         case "update":
         state.paused = false
-        initialize()
+        updated()
         break
         case "run":
         if(!state.paused) mainloop()
@@ -242,7 +242,7 @@ def ChangedModeHandler(evt)
     }
     else if(state.paused == true && state.restricted == true)
     {
-        initialize()
+        updated()
     }
 }
 def motionHandler(evt)
@@ -272,7 +272,8 @@ def setPointHandler(evt)
     def currDim = dimmer.currentValue("level")
 
     boolean notBoostVal = evt.value.toInteger() != state.boostVal.toInteger()
-
+    boolean correspondingMode = (evt.name == "heatingSetpoint" && state.lastNeed == "heat") || (evt.name == "coolingSetpoint" && state.lastNeed == "cool")
+        
     logging (
         """state.lastNeed = $state.lastNeed   
 evt.value = $evt.value   
@@ -658,9 +659,12 @@ def Poll()
 /************************************************BOOLEANS*********************************************************/
 boolean contactsAreOpen() 
 {
+    boolean Open = false
+    if(contact)
+    {
     def s = contact.size()
     def i = 0
-    boolean Open = false
+    
     for(s!=0;i<s;i++)
     {
         if(contact[i]?.currentValue("contact") == "open")
@@ -668,6 +672,7 @@ boolean contactsAreOpen()
             Open = true
             break
         }
+    }
     }
     logging("$contact open ?: $Open")
     return Open
@@ -730,11 +735,4 @@ def logsOff(){
     log.warn "debug logging disabled..."
     app.updateSetting("enabledebug",[value:"false",type:"bool"])
 }
-
-
-
-
-
-
-
 

@@ -86,7 +86,11 @@ def settings() {
             input "heatpump", "bool", title: "$thermostat is a heat pump or I want to add a secondary electric heater", submitOnChange:true
             if(heatpump)
             {
-                input "heater", "capability.switch", title: "Select a switch to control an alternate heater", required: true, submitOnChange:true, multiple: false   
+                input "heater", "capability.switch", title: "Select a switch to control an alternate heater", required: true, submitOnChange:true, multiple: false 
+                if(heater)
+                {
+                    input "lowtemp", "number", title: "low temperature threshold", required: true, defaultValue: 30
+                }
             }
             input "outsideTemp", "capability.temperatureMeasurement", title: "select a weather sensor for outside temperature", required:true, submitOnChange:true
             input "sensor", "capability.temperatureMeasurement", title: "select a temperature sensor (optional)", submitOnChange:true
@@ -108,7 +112,7 @@ def settings() {
                 input "outsideThreshold", "number", title: "type a numerical value representing the outside temperature threshold", required: true, submitOnChange:true, defaultValue:60 
             }
         }
-        section("MOTION MANAGEMENT")
+        section("POWER SAVING")
         {
             input "motion", "capability.motionSensor", title: "Save power when there's no motion", required: false, multiple: true, submitOnChange:true
 
@@ -117,6 +121,13 @@ def settings() {
                 input "noMotionTime", "number", title: "after how long?", description: "enter a number in minutes"
                 input "motionmodes", "mode", title: "Consider motion only in these modes", multiple: true, required: true 
             }  
+
+            input "powersavingmode", "mode", title: "Save power when in one of these modes", required: false, multiple: true, submitOnChange: true
+            if(powersavingmode)
+            {
+                input "criticalcold", "number", title: "Set a critical low temperature", required: true
+                input "criticalhot", "number", title: "Set a critical high temperature", required: true
+            }
         }
 
 
@@ -127,16 +138,7 @@ def settings() {
             input "poll", "button", title: "REFRESH"
             input "polldevices", "bool", title: "Poll devices"
             input "enabledebug", "bool", title: "Debug", submitOnChange:true
-            if(enabledebug)
-            {
-                log.warn "debug enabled"             
-                runIn(1800,logsOff)
-                log.info "debug will be disabled in 30 minutes"
-            }
-            else 
-            {
-                log.warn "debug disabled"
-            }
+
         }
     }
 }
@@ -153,6 +155,17 @@ def updated() {
     initialize()
 }
 def initialize(){
+    if(enabledebug)
+    {
+        log.warn "debug enabled"      
+        state.EnableDebugTime = now()
+        runIn(1800,disablelogging)
+        log.info "debug will be disabled in 30 minutes"
+    }
+    else 
+    {
+        log.warn "debug disabled"
+    }
     state.paused = false
     state.restricted = false
     state.lastNeed = "heat"
@@ -273,7 +286,7 @@ def setPointHandler(evt)
 
     boolean notBoostVal = evt.value.toInteger() != state.boostVal.toInteger()
     boolean correspondingMode = (evt.name == "heatingSetpoint" && state.lastNeed == "heat") || (evt.name == "coolingSetpoint" && state.lastNeed == "cool")
-        
+
     logging (
         """state.lastNeed = $state.lastNeed   
 evt.value = $evt.value   
@@ -284,7 +297,7 @@ notBoostVal: ${notBoostVal}""")
 
     if(currDim != evt.value && notBoostVal)
     {
-        dimmer.setLevel(evt.value)
+        dimmer.setLevel(evt.value.toInteger())
         logging("$dimmer set to $evt.value")
     }
 
@@ -313,6 +326,13 @@ def outsideThresDimmerHandler()
 /************************************************MAIN loop*********************************************************/
 def mainloop()
 {
+
+    if(state.EnableDebugTime == null) state.EnableDebugTime = now()
+    if(enabledebug && now() - state.EnableDebugTime > 1800000)
+    {
+        log.info "Debug has been up for too long..."
+        disablelogging() 
+    }
 
     def therMode = thermostat.currentValue("thermostatMode")
     logging("$thermostat is in $therMode mode 54dfg")
@@ -384,7 +404,7 @@ def mainloop()
                 logging("THERMOSTAT SET TO $need mode (587gf)")
                 if(need == "off")
                 {
-                   state.offAttempt = now() as long
+                    state.offAttempt = now() as long
                         }
             }
             else 
@@ -399,7 +419,7 @@ def mainloop()
         }
 
         logging("currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired} ")
-        if(need != "off" && currSP != desired)
+        if(need != "off" && currSP.toInteger() != desired)
         {
             if(boost)
             {
@@ -472,11 +492,11 @@ def mainloop()
             }
             else if((!pwLow &&  need in ["heat", "cool"]) || (need == "off" && pwLow))
             {
-                log.info("EVERYTHING OK")
+                logging("EVERYTHING OK")
             }
             else 
             {
-                log.warn("There's a problem... Auto Fix Should Kick in within time threshold")
+                logging("Auto Fix Should Kick in within time threshold")
             }
         }
     }
@@ -493,9 +513,14 @@ def virtualThermostat(need)
     if(heatpump)
     {
         def outsideTemp = outsideTemp.currentValue("temperature") // only needed if electric heater here
-        if(need == "heat" && outsideTemp < 40)
+        logging("outsideTemp < lowtemp ? ${outsideTemp < lowtemp}")
+        if(need == "heat" && outsideTemp < lowtemp.toInteger())
         {
-            if(heater.currentValue("switch") != "on")
+            boolean powercap = heater.hasAttribute("power")
+            logging("is heater power meter capable? $powercap")
+            boolean powerok = powercap ? (heater.currentValue("power") > 100) : true
+            logging "$heater power consumption is ${powerok ? "ok" : "not as expected"} ${powercap ? "${heater.currentValue("power")}watts" : ''}"
+            if(heater.currentValue("switch") != "on" || !powerok)
             {
                 logging("Turning $heater on because outside temperature is currently ${outsideTemp}°F")
                 heater.on()   
@@ -507,6 +532,8 @@ def virtualThermostat(need)
         }
         else 
         {
+
+
             if(heater.currentValue("switch") != "off")
             {
                 logging("Turning $heater off")
@@ -537,35 +564,57 @@ def getDesired()
 }
 def getNeed(desired)
 {
+
+    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode
+
+
     int outsideTemp = outsideTemp.currentValue("temperature")
     def need0 = ""
     def need1 = ""
     def need = []
     def inside = getInsideTemp()
+
     boolean contactClosed = !contactsAreOpen()  
     logging("contactClosed = $contactClosed")
     def outsideThres = getOutsideThershold()
-    logging("outside Temperature Threshold is currently: $outsideThres")
+    logging("outside Temperature Threshold is currently: $outsideThres inside = $inside")
 
-    if(outsideTemp > outsideThres && inside >= desired + 0.5 && contactClosed && Active)
+    if(INpwSavingMode)
     {
-        need0 = "Cool"// capital letter for later construction of the setCoolingSetpoint cmd
-        need1 = "cool"
-        state.lastNeed = need1
-        logging("need and state.lastNeed set to ${[need0,need1]}")
+        if(outsideTemp > outsideThres && inside >= desired /*+ 0.5*/ && contactClosed && Active)
+        {
+            need0 = "Cool"// capital letter for later construction of the setCoolingSetpoint cmd
+            need1 = "cool"
+            state.lastNeed = need1
+            logging("need and state.lastNeed set to ${[need0,need1]}")
+        }
+        else if(outsideTemp < outsideThres && inside <= desired /*- 0.5*/ && contactClosed && Active)
+        {
+            need0 = "Heat" // capital letter for later construction of the setHeatingSetpoint cmd
+            need1 = "heat"
+            state.lastNeed = need1
+            logging("need and state.lastNeed set  to ${[need0,need1]}")
+        }
+        else
+        {
+            need0 = "off"
+            need1 = "off"
+            logging("need set to OFF")
+        }
+
     }
-    else if(outsideTemp < outsideThres && inside <= desired - 0.5 && contactClosed && Active)
-    {
-        need0 = "Heat" // capital letter for later construction of the setHeatingSetpoint cmd
-        need1 = "heat"
-        state.lastNeed = need1
-        logging("need and state.lastNeed set  to ${[need0,need1]}")
-    }
-    else
-    {
-        need0 = "off"
-        need1 = "off"
-        logging("need set to OFF")
+    else   // POWER SAVING MODE      
+    { 
+        if(need1 == "cool" && inside < criticalhot)
+        {
+            log.info "POWER SAVING MODE"
+            need = "off"
+        }
+        else if(need1 == "heat" && inside > criticalcold)
+        {
+            log.info "POWER SAVING MODE"
+            need = "off"
+        }
     }
 
     need = [need0, need1]
@@ -662,17 +711,17 @@ boolean contactsAreOpen()
     boolean Open = false
     if(contact)
     {
-    def s = contact.size()
-    def i = 0
-    
-    for(s!=0;i<s;i++)
-    {
-        if(contact[i]?.currentValue("contact") == "open")
+        def s = contact.size()
+        def i = 0
+
+        for(s!=0;i<s;i++)
         {
-            Open = true
-            break
+            if(contact[i]?.currentValue("contact") == "open")
+            {
+                Open = true
+                break
+            }
         }
-    }
     }
     logging("$contact open ?: $Open")
     return Open
@@ -731,8 +780,15 @@ def logging(message)
 }
 
 
-def logsOff(){
+def disablelogging(){
     log.warn "debug logging disabled..."
     app.updateSetting("enabledebug",[value:"false",type:"bool"])
 }
+
+
+
+
+
+
+
 

@@ -566,7 +566,11 @@ def getNeed(desired)
 {
 
     boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode
-
+    logging """
+INpwSavingMode = $INpwSavingMode
+location.mode in powersavingmode = ${location.mode in powersavingmode}
+powersavingmode = $powersavingmode
+"""
 
     int outsideTemp = outsideTemp.currentValue("temperature")
     def need0 = ""
@@ -579,7 +583,7 @@ def getNeed(desired)
     def outsideThres = getOutsideThershold()
     logging("outside Temperature Threshold is currently: $outsideThres inside = $inside")
 
-    if(INpwSavingMode)
+    if(!INpwSavingMode)
     {
         if(outsideTemp > outsideThres && inside >= desired /*+ 0.5*/ && contactClosed && Active)
         {
@@ -605,15 +609,21 @@ def getNeed(desired)
     }
     else   // POWER SAVING MODE      
     { 
-        if(need1 == "cool" && inside < criticalhot)
+        logging """
+inside < criticalhot :  ${inside < criticalhot}
+inside > criticalcold :  ${inside > criticalcold}
+"""
+        if(inside < criticalhot)
         {
             log.info "POWER SAVING MODE"
-            need = "off"
+            need0 = "off"
+            need1 = "off"
         }
-        else if(need1 == "heat" && inside > criticalcold)
+        else if(inside > criticalcold)
         {
             log.info "POWER SAVING MODE"
-            need = "off"
+            need0 = "off"
+            need1 = "off"
         }
     }
 
@@ -784,11 +794,3 @@ def disablelogging(){
     log.warn "debug logging disabled..."
     app.updateSetting("enabledebug",[value:"false",type:"bool"])
 }
-
-
-
-
-
-
-
-

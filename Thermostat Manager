@@ -111,7 +111,7 @@ def settings() {
                 input "bedSensor", "capability.contactSensor", title: "When these contacts are closed, do not accept any change", multiple: true, required: false, submitOnChange:true
             }
 
-            input "outsideRef", "enum", title: "Select a temperature threshold reference method", required: true, options:["virtual dimmer", "static value"], submitOnChange:true
+            input "outsideRef", "enum", title: "Select a temperature threshold reference method", required: false, options:["virtual dimmer", "static value"], submitOnChange:true
             if(outsideRef == "virtual dimmer")
             {                
                 input "outsideThresDimmer", "capability.switchLevel", title: "Use this dimmer as a reference for outside temperature threshold", required: false, submitOnChange:true

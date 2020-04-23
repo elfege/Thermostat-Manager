@@ -114,7 +114,7 @@ def settings() {
             input "outsideRef", "enum", title: "Select a temperature threshold reference method", required: false, options:["virtual dimmer", "static value"], submitOnChange:true
             if(outsideRef == "virtual dimmer")
             {                
-                input "outsideThresDimmer", "capability.switchLevel", title: "Use this dimmer as a reference for outside temperature threshold", required: false, submitOnChange:true
+                input "outsideThresDimmer", "capability.switchLevel", title: "Use this dimmer as a reference for outside temperature threshold", required: true, submitOnChange:true
             }
             else if(outsideRef == "static value")
             {
@@ -144,10 +144,10 @@ def settings() {
             input "controlWindows", "bool", title: "Control some windows", submitOnChange:true
             if(controlWindows)
             {
-            input "windows", "capability.switch", title: "Turn on those switches when home needs to cool down, wheather permitting", multiple:true, required: false, submitOnChange: true
-            if(windows)
-            {
-              
+                input "windows", "capability.switch", title: "Turn on those switches when home needs to cool down, wheather permitting", multiple:true, required: false, submitOnChange: true
+                if(windows)
+                {
+
                     input "outsidetempwindowsH", "number", title: "Set a temperature below which it's ok to turn on $windows", required: true, submitOnChange: true
                     input "outsidetempwindowsL", "number", title: "Set a temperature below which it's NOT ok to turn on $windows", required: true, submitOnChange: true
                     if(outsidetempwindowsH && outsidetempwindowsL)
@@ -176,10 +176,10 @@ def settings() {
 
                                 }
                             }
-                        
+
+                        }
                     }
                 }
-            }
             }
         }
         section()
@@ -253,7 +253,7 @@ def initialize(){
     {
         subscribe(sensor, "temperature", temperatureHandler)
     }
-    if(outsideThresDimmer)
+    if(outsideRef)
     {
         subscribe(outsideThresDimmer, "level", outsideThresDimmerHandler)
     }
@@ -473,6 +473,33 @@ next consistency check in ${((timeBtwPwChecks - (now() - state.timeCmdSent))/100
 
 
             state.boostVal = 85
+            def currSP = thermostat.currentValue("thermostatSetpoint").toInteger()
+            logging"""
+therMode = $therMode currSP = $currSP"
+currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired} 
+"""
+
+            if(currSP != desired)
+            {
+                setpointSentByApp = true
+                if(need != "off") // "off" cant be parsed into this string "setHeatingSetpoint"
+                {
+                    thermostat."${cmd}"(desired)   // set desired temp
+                    logging"$thermostat ${cmd} $desired (54fh)"
+                }
+                else // thermostat need is off, so string is not right
+                {
+                    // rebuild the string with last need 
+                    // capitalize the first character
+                    cmd = "set"+"${state.lastNeed.capitalize()}"+"ingSetpoint"
+                    thermostat."${cmd}"(desired) 
+                    log.warn "$thermostat ${state.lastNeed.capitalize()}ingSetpoint $desired (7dzh)"
+                }
+
+            }
+
+            virtualThermostat(need)
+
 
             if(boost && need in ["heat", "cool"])
             {
@@ -507,15 +534,6 @@ next consistency check in ${((timeBtwPwChecks - (now() - state.timeCmdSent))/100
                 desired = state.boostVal
             }
 
-
-
-
-            def currSP = thermostat.currentValue("thermostatSetpoint").toInteger()
-            logging("therMode = $therMode currSP = $currSP")
-
-            virtualThermostat(need)
-
-
             if(therMode != need)
             {
                 if(need != "off" || (need == "off" && (sensor || offrequiredbyuser)))
@@ -538,16 +556,18 @@ next consistency check in ${((timeBtwPwChecks - (now() - state.timeCmdSent))/100
                 logging("Thermostat already set to $need mode")
             }
 
-            logging("currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired} ")
+            //logging("currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired} ")
+
+
             if(need != "off" && currSP.toInteger() != desired)
             {
                 if(boost)
                 {
                     pauseExecution(2000)
                 }
-                setpointSentByApp = true
-                thermostat."${cmd}"(desired)   // set desired temp
-                logging("THERMOSTAT SET TO $desired (564fdevrt)")
+                /* setpointSentByApp = true
+thermostat."${cmd}"(desired)   // set desired temp
+logging("THERMOSTAT SET TO $desired (564fdevrt)")*/
             }
             else if(need != "off")
             {
@@ -893,67 +913,67 @@ private getOutsideThershold(){
 def Poll(){
 
 
-        boolean thermPoll = thermostat.hasCommand("poll")
-        boolean thermRefresh = thermostat.hasCommand("refresh") 
+    boolean thermPoll = thermostat.hasCommand("poll")
+    boolean thermRefresh = thermostat.hasCommand("refresh") 
 
 
-        boolean outsidePoll = outsideTemp.hasCommand("poll")
-        boolean outsideRefresh = outsideTemp.hasCommand("refresh")
-        boolean override = state.override
+    boolean outsidePoll = outsideTemp.hasCommand("poll")
+    boolean outsideRefresh = outsideTemp.hasCommand("refresh")
+    boolean override = state.override
 
-        if(thermRefresh){
-            thermostat.refresh()
-            logging("refreshing $thermostat")
-        }
-        if(thermPoll){
-            thermostat.poll()
-            logging("polling $thermostat")
-        }
-        if(outsideRefresh){
-            outsideTemp.refresh()
-            logging("refreshing $outsideTemp")
-        }
-        if(outsidePoll){
-            outsideTemp.poll()
-            logging("polling $outsideTemp")
-        }
+    if(thermRefresh){
+        thermostat.refresh()
+        logging("refreshing $thermostat")
+    }
+    if(thermPoll){
+        thermostat.poll()
+        logging("polling $thermostat")
+    }
+    if(outsideRefresh){
+        outsideTemp.refresh()
+        logging("refreshing $outsideTemp")
+    }
+    if(outsidePoll){
+        outsideTemp.poll()
+        logging("polling $outsideTemp")
+    }
 
-        boolean heaterPoll = heater?.hasCommand("poll")
-        boolean heaterRefresh = heater?.hasCommand("refresh") 
+    boolean heaterPoll = heater?.hasCommand("poll")
+    boolean heaterRefresh = heater?.hasCommand("refresh") 
 
-        if(heaterRefresh){
-            heater.refresh()
-            logging("refreshing $heater")
-        }
-        if(heaterPoll){
-            heater.poll()
-            logging("polling $heater")
-        }
+    if(heaterRefresh){
+        heater.refresh()
+        logging("refreshing $heater")
+    }
+    if(heaterPoll){
+        heater.poll()
+        logging("polling $heater")
+    }
 
 
-        boolean sensorPoll = sensor?.hasCommand("poll")
-        boolean sensorRefresh = sensor?.hasCommand("refresh") 
+    boolean sensorPoll = sensor?.hasCommand("poll")
+    boolean sensorRefresh = sensor?.hasCommand("refresh") 
 
-        if(sensorRefresh){
-            sensor.refresh()
-            logging("refreshing $sensor")
-        }
-        if(sensorPoll){
-            sensor.poll()
-            logging("polling $sensor")
-        }
+    if(sensorRefresh){
+        sensor.refresh()
+        logging("refreshing $sensor")
+    }
+    if(sensorPoll){
+        sensor.poll()
+        logging("polling $sensor")
+    }
 
-        boolean pwPoll = pw?.hasCommand("poll")
-        boolean pwRefresh = pw?.hasCommand("refresh") 
+    boolean pwPoll = pw?.hasCommand("poll")
+    boolean pwRefresh = pw?.hasCommand("refresh") 
 
-        if(pwRefresh){
-            pw.refresh()
-            logging("refreshing $pw")
-        }
-        if(pwPoll){
-            sensor.poll()
-            logging("polling $pw")
-        }
+    if(pwRefresh){
+        pw.refresh()
+        logging("refreshing $pw")
+    }
+    if(pwPoll){
+        sensor.poll()
+        logging("polling $pw")
+    }
 
 }
 /************************************************BOOLEANS*********************************************************/

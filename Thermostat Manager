@@ -396,6 +396,7 @@ def mainloop(){
         def needData = getNeed(desired)
         def need = needData[1]
         def inside = getInsideTemp()
+        def currSP = thermostat.currentValue("thermostatSetpoint").toInteger()
         logging("need is needData[1] = $need")
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
@@ -408,7 +409,7 @@ def mainloop(){
             def timeBtwPwChecks = 120000
             boolean delayExpired = now() - state.timeCmdSent > 120000
             boolean underpower = pw?.currentValue("power") < 200 && delayExpired
-            boolean overpower = pw?.currentValue("power") > 200 && delayEwpired
+            boolean overpower = pw?.currentValue("power") > 200 && delayEXpired
             def watts = pw?.currentValue("power")
             logging """
 thermostat current mode = $thermMode
@@ -470,33 +471,12 @@ next consistency check in ${((timeBtwPwChecks - (now() - state.timeCmdSent))/100
         if(therMode != "auto")
         {
 
-
-
             state.boostVal = 85
-            def currSP = thermostat.currentValue("thermostatSetpoint").toInteger()
+            
             logging"""
 therMode = $therMode currSP = $currSP"
 currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired} 
 """
-
-            if(currSP != desired)
-            {
-                setpointSentByApp = true
-                if(need != "off") // "off" cant be parsed into this string "setHeatingSetpoint"
-                {
-                    thermostat."${cmd}"(desired)   // set desired temp
-                    logging"$thermostat ${cmd} $desired (54fh)"
-                }
-                else // thermostat need is off, so string is not right
-                {
-                    // rebuild the string with last need 
-                    // capitalize the first character
-                    cmd = "set"+"${state.lastNeed.capitalize()}"+"ingSetpoint"
-                    thermostat."${cmd}"(desired) 
-                    log.warn "$thermostat ${state.lastNeed.capitalize()}ingSetpoint $desired (7dzh)"
-                }
-
-            }
 
             virtualThermostat(need)
 
@@ -565,9 +545,9 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
                 {
                     pauseExecution(2000)
                 }
-                /* setpointSentByApp = true
-thermostat."${cmd}"(desired)   // set desired temp
-logging("THERMOSTAT SET TO $desired (564fdevrt)")*/
+                setpointSentByApp = true
+                thermostat."${cmd}"(desired)   // set desired temp
+                logging("THERMOSTAT SET TO $desired (564fdevrt)")
             }
             else if(need != "off")
             {

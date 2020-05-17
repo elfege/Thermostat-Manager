@@ -1,8 +1,3 @@
-import java.text.SimpleDateFormat
-import groovy.transform.Field
-import groovy.json.JsonOutput
-
-@Field static boolean setpointSentByApp = false
 
 definition(
     name: "Thermostat Manager",
@@ -115,10 +110,18 @@ def settings() {
             if(outsideRef == "virtual dimmer")
             {                
                 input "outsideThresDimmer", "capability.switchLevel", title: "Use this dimmer as a reference for outside temperature threshold", required: true, submitOnChange:true
+                if(outsideThreshold)
+                {
+                    paragraph "When outside temperature is below this dimmer's value (${outsideThresDimmer.currentValue("dimmer")}), the app will heat your room and cool it down when outside temperature is above"
+                }
             }
             else if(outsideRef == "static value")
             {
                 input "outsideThreshold", "number", title: "type a numerical value representing the outside temperature threshold", required: true, submitOnChange:true, defaultValue:60 
+                if(outsideThreshold)
+                {
+                    paragraph "When outside temperature is below ${outsideThreshold}, the app will heat your room and cool it down when outside temperature is above"
+                }
             }
         }
         section("POWER SAVING")
@@ -242,7 +245,7 @@ def initialize(){
     state.boostVal = 85
     state.boostMode = boostMode
 
-
+    state.setpointSentByApp = false
     state.openByApp = true
     state.closedByApp = true
 
@@ -254,7 +257,7 @@ def initialize(){
 
     logging("subscribing to events...")
 
-    subscribe(location, "mode", ChangedModeHandler) 
+    //subscribe(location, "mode", ChangedModeHandler) 
     subscribe(thermostat, "temperature", temperatureHandler)
     if(sensor)
     {
@@ -270,6 +273,8 @@ def initialize(){
     descriptiontext "subscribed ${thermostat}'s heatingSetpoint to setPointHandler"
     subscribe(thermostat, "coolingSetpoint", setPointHandler)
     descriptiontext "subscribed ${thermostat}'s coolingSetpoint to setPointHandler"
+
+    subscribe(location, "mode", modeChangeHandler)
 
     if(motion)
     {
@@ -288,6 +293,22 @@ def initialize(){
 
 }
 /************************************************EVT HANDLERS*********************************************************/
+def modeChangeHandler(evt){
+    log.debug "$evt.name is now $evt.value"
+    state.openByApp = true
+    state.closedByApp = true  
+    
+     if(evt.value in restricted)
+    {
+        state.paused = true   
+        state.restricted = true
+    }
+    else if(state.paused == true && state.restricted == true)
+    {
+        updated()
+    }
+    mainloop()
+}
 def appButtonHandler(btn) {
     switch(btn) {
         case "pause":state.paused = !state.paused
@@ -318,19 +339,7 @@ def appButtonHandler(btn) {
 
     }
 }
-def ChangedModeHandler(evt){
-    logging("mode is $evt.value")
 
-    if(evt.value in restricted)
-    {
-        state.paused = true   
-        state.restricted = true
-    }
-    else if(state.paused == true && state.restricted == true)
-    {
-        updated()
-    }
-}
 def motionHandler(evt){
 
     logging("$evt.device is $evt.value")
@@ -344,7 +353,7 @@ def temperatureHandler(evt){
 }
 def setPointHandler(evt){
 
-    if(!setpointSentByApp)
+    if(!state.setpointSentByApp)
     {
         descriptiontext "new $evt.name is $evt.value---------------------------------------"
 
@@ -354,7 +363,7 @@ def setPointHandler(evt){
         boolean correspondingMode = (evt.name == "heatingSetpoint" && state.lastNeed == "heat") || (evt.name == "coolingSetpoint" && state.lastNeed == "cool")
 
         logging"""
-setpointSentByApp = $setpointSentByApp
+state.setpointSentByApp = $state.setpointSentByApp
 Current $dimmer value is $currDim
 state.lastNeed = $state.lastNeed   
 evt.value = $evt.value   
@@ -366,18 +375,23 @@ notBoostVal: ${notBoostVal}"""
         def need = needData[1]
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
+
         // make sure the therm event is same as current need
         // as to not apply a value from a differentiated thermostat mode (heat set to 75 will modify coolingSP and then trigger an event)
 
-        if(currDim != evt.value && notBoostVal && setpointSentByApp == false) 
+        if(correspondingMode && currDim != evt.value && notBoostVal && state.setpointSentByApp == false) 
         {
-            runIn(3, setDimmer, [data:evt.value.toInteger()]) // important to delay this so setpointSentByApp doesn't get messed up
+            runIn(3, setDimmer, [data:evt.value.toInteger()]) // important to delay this so state.setpointSentByApp doesn't get messed up
         }
-        else if(!notBoostVal)
+        if(!notBoostVal)
         {
             log.warn "BOOST VALUE, not adjusting dimmer"   
         }
-        else 
+        if(!correspondingMode)
+        {
+            descriptiontext "not updating dimmer because this is $evt.name and last need was $state.lastNeed"
+        }
+        if(currDim == evt.value)
         {
             descriptiontext "dimmer level ok (${dimmer.currentValue("level")} == ${evt.value}"
         }
@@ -386,7 +400,7 @@ notBoostVal: ${notBoostVal}"""
     {
         log.warn "event generated by this app, ignoring..."
     }
-    setpointSentByApp = false // always reset this static/class variable after calling it
+    state.setpointSentByApp = false // always reset this static/class variable after calling it
     mainloop()
 }
 def dimmerHandler(evt){
@@ -407,13 +421,14 @@ def mainloop(){
         def need = needData[1]
         def inside = getInsideTemp()
         def currSP = thermostat.currentValue("thermostatSetpoint").toInteger()
+        def thermMode = thermostat.currentValue("thermostatMode")
         logging("need is needData[1] = $need")
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
-        if(bedSensorIsClosed() && thermostat.currentValue("thermostatMode") != "auto") { 
+        if(bedSensorIsClosed() && thermMode != "auto") { 
             // when bedSensor is closed we work with no other method than getNeed(), not getting input from the dimmer
             descriptiontext "$app.label is now running in limited mode (without dimmer input) because $bedSensor ${bedSensor.size() > 1?"have":"has"} recently changed state" 
-            def thermMode = thermostat.currentValue("thermostatMode")
+            
             def outsideTemperature = outsideTemp.currentValue("temperature")
             if(!state.timeCmdSent) {state.timeCmdSent = now()}
             def timeBtwPwChecks = 120000
@@ -456,6 +471,11 @@ next consistency check in ${((timeBtwPwChecks - (now() - state.timeCmdSent))/100
             virtualThermostat(need)
 
             return // stop the app here, the unit will work on its current settings and values
+        }
+        else if(thermMOde == "auto")
+        {
+            log.info "OVERRIDE"
+            return
         }
 
         desired = getDesired() // this will update from dimmer's value
@@ -555,7 +575,7 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
                 {
                     pauseExecution(2000)
                 }
-                setpointSentByApp = true
+                state.setpointSentByApp = true
                 thermostat."${cmd}"(desired)   // set desired temp
                 logging("THERMOSTAT SET TO $desired (564fdevrt)")
             }
@@ -568,7 +588,7 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
             {
                 state.boostOk = true
                 state.boostAttempt = now() as long
-                    setpointSentByApp = true
+                    state.setpointSentByApp = true
                 pauseExecution(5000)
                 thermostat."${boostMode}"
                 logging("THERMOSTAT SET TO $boostMode mode")
@@ -601,7 +621,7 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
                     log.warn "SELF HEALING ATTEMPT"
                     state.boostAttempt = now() as long
                         logging("re-sending ${cmd}($desired)...")
-                    setpointSentByApp = true
+                    state.setpointSentByApp = true
                     thermostat."${cmd}"(desired) // set the desired boost temperature value
                     logging("waiting 10 seconds")
                     pauseExecution(10000) // give plenty of times for respective commands to be received and processed by the device driver
@@ -637,7 +657,7 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
     }
 }
 def setDimmer(int val){
-    setpointSentByApp = true
+    state.setpointSentByApp = true
     dimmer.setLevel(val) // reverse definition 
     descriptiontext "$dimmer set to $val BY THIS APP"
 }
@@ -702,40 +722,39 @@ descriptiontext "desired value input from dimmer ($dimmer) ignored because some 
 def getNeed(desired){
 
     boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode
+    boolean contactClosed = !contactsAreOpen()  
+    def outsideThres = getOutsideThershold()
     int outsideTemperature = outsideTemp.currentValue("temperature")
     def need0 = ""
     def need1 = ""
     def need = []
+    def amplThreshold = 2
     def inside = getInsideTemp()
 
-    boolean contactClosed = !contactsAreOpen()  
-    def outsideThres = getOutsideThershold()
-    logging"""
--------------------------------
-INpwSavingMode = $INpwSavingMode
-location.mode in powersavingmode = ${location.mode in powersavingmode}
-powersavingmode = $powersavingmode
-outsideTemperature > outsideThres && inside >= desired ? ${outsideTemperature > outsideThres && inside >= desired}
-outsideTemperature < outsideThres && inside <= desired ? ${outsideTemperature < outsideThres && inside <= desired}
-contactClosed = $contactClosed
-outsideThres = $outsideThres
--------------------------------
-"""
+    def amplitude = Math.abs(inside - desired)
+    boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
+    boolean needCool = outsideTemperature > desired && (amplitudeTooHigh || outsideTemperature > outsideThres) && inside > desired 
+    boolean needHeat = outsideTemperature < desired && (amplitudeTooHigh || outsideTemperature < outsideThres) && inside < desired 
+
+
     if(!INpwSavingMode)
     {
-        if(outsideTemperature > outsideThres && inside >= desired /*+ 0.5*/ && contactClosed && Active)
+        if((needCool || needHeat) && contactClosed && Active)
         {
-            need0 = "Cool"// capital letter for later construction of the setCoolingSetpoint cmd
-            need1 = "cool"
-            state.lastNeed = need1
-            logging("need and state.lastNeed set to ${[need0,need1]}")
-        }
-        else if(outsideTemperature < outsideThres && inside <= desired /*- 0.5*/ && contactClosed && Active)
-        {
-            need0 = "Heat" // capital letter for later construction of the setHeatingSetpoint cmd
-            need1 = "heat"
-            state.lastNeed = need1
-            logging("need and state.lastNeed set  to ${[need0,need1]}")
+            if(needCool)
+            {
+                need0 = "Cool"// capital letter for later construction of the setCoolingSetpoint cmd
+                need1 = "cool"
+                state.lastNeed = need1
+                logging("need and state.lastNeed set to ${[need0,need1]}")
+            }
+            if(needHeat) // heating need supercedes cooling need in order to prevent amplitude paradox
+            {
+                need0 = "Heat" // capital letter for later construction of the setHeatingSetpoint cmd
+                need1 = "heat"
+                state.lastNeed = need1
+                logging("need and state.lastNeed set  to ${[need0,need1]}")
+            }
         }
         else
         {
@@ -751,13 +770,13 @@ outsideThres = $outsideThres
 inside < criticalhot :  ${inside < criticalhot}
 inside > criticalcold :  ${inside > criticalcold}
 """
-        if(inside < criticalhot)
+        if(inside < criticalhot || !contactClosed)
         {
             descriptiontext "POWER SAVING MODE"
             need0 = "off"
             need1 = "off"
         }
-        else if(inside > criticalcold)
+        else if(inside > criticalcold || !contactClosed)
         {
             descriptiontext "POWER SAVING MODE"
             need0 = "off"
@@ -770,25 +789,26 @@ inside > criticalcold :  ${inside > criticalcold}
     {
         def humidity = outsideTemp.currentValue("humidity") 
         boolean outsideWithinRange = outsideTemperature < outsidetempwindowsH && outsideTemperature > outsidetempwindowsL && humidity < 75
-        boolean needFreshAir = inside >= desired + 2
+        boolean needFreshAir = inside > desired //+ amplThreshold
         if(INpwSavingMode)
         {
             outsideWithinRange = outsideTemperature < criticalhot && outsideTemperature > criticalcold
             needFreshAir = inside < criticalhot && inside > criticalcold
         }
-        boolean someAreOff = windows.findAll{it.currentValue("switch") == "off"}
-        boolean someAreOpen = windows.findAll{it.currentValue("switch") == "on"}
-        logging """
+        boolean someAreOff = windows.findAll{it.currentValue("switch") == "off"}?.size() > 0
+        boolean someAreOpen = windows.findAll{it.currentValue("switch") == "on"}?.size() > 0
+        logging """<div style=\"width:102%;background-color:green;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
+**********************WINDOWS************************
 state.openByApp = $state.openByApp
 state.closedByApp = $state.closedByApp
-outsideTemp = $outsideTemperature
-inside temperature = $inside
-desired = $desired
 outsideWithinRange = $outsideWithinRange
+amplThreshold = $amplThreshold
 needFreshAir = $needFreshAir
 someAreOff = $someAreOff
 someAreOpen = $someAreOpen
 humidity = ${humidity}%
+*****************************************************
+</div>
 """
         //state.closedByApp = true
 
@@ -797,7 +817,7 @@ humidity = ${humidity}%
 
         if(needFreshAir && outsideWithinRange)
         {
-            descriptiontext "$windows INSTEAD OF AC"
+            descriptiontext "using $windows INSTEAD OF AC"
             need0 = "off"
             need1 = "off"
 
@@ -832,11 +852,12 @@ humidity = ${humidity}%
         else if(someAreOpen)
         {
             long closingTime = state.closingTime ? state.closingTime : now()
-            boolean exception = someAreOpen && ((state.closedByApp && now() - closingTime > 300000) || !outsideWithinRange)
+            boolean tooColdInside = inside <= desired - 4
+            boolean exception = someAreOpen && ((state.closedByApp && now() - closingTime > 300000 && tooColdInside) || (!outsideWithinRange && tooColdInside))
             long elapsed = now() - closingTime
             def elapsedseconds = elapsed/1000
             def elapsedminutes = elapsed/1000/60
-            if(exception) {log.warn "$WINDOWS still open! ${exception ? ("last closing time was ${elapsed>=60000 ? ("$elapsedminutes minutes") : ("$elapsedseconds seconds")} ago"):""}"}
+            if(exception) {log.warn "$windows still open! ${exception ? ("last closing time was ${elapsed>=60000 ? ("$elapsedminutes minutes") : ("$elapsedseconds seconds")} ago"):""}"}
             if(state.openByApp || exception)
             {
                 log.warn "closing $windows"
@@ -860,7 +881,29 @@ humidity = ${humidity}%
     }
 
     need = [need0, need1]
-    logging ("need = $need")
+    
+        logging"""<div style=\"width:102%;background-color:#1C2BB7;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
+--------------NEED---------------------
+power saving management= ${powersavingmode ? "$powersavingmode INpwSavingMode = $INpwSavingMode":"option not selected by user"}
+amplitude = $amplitude
+amplitudeTooHigh = $amplitudeTooHigh
+outside = $outsideTemperature
+inside = $inside
+desired = $desired
+contactClosed = $contactClosed
+outsideThres = $outsideThres
+outsideTemperature > desired = ${outsideTemperature > desired}
+outsideTemperature < desired = ${outsideTemperature < desired}
+outsideTemperature > outsideThres = ${outsideTemperature > outsideThres}
+outsideTemperature < outsideThres = ${outsideTemperature < outsideThres}
+inside > desired = ${inside > desired}
+inside < desired = ${inside < desired}
+needCool = $needCool
+needHeat = $needHeat (needHeat supercedes needCool) 
+final NEED value = $need
+---------------------------------------
+</div>
+"""
     return need
 
 }
@@ -909,7 +952,7 @@ outsideThresDimmer = $outsideThresDimmer"""
     }
     else 
     {
-        return 60 // default
+        return 70 // default
     }
 
 }

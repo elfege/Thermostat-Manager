@@ -4,7 +4,7 @@ definition(
     namespace: "elfege",
     author: "ELFEGE",
 
-    description: "Manage your thermostats with contact sensors, motion sensors and boost operations",
+    description: "Smart Thermostat Manager (optional: contact sensors, motion sensors, power meter and safe redundancies)",
 
     category: "Green Living",
     iconUrl: "https://www.philonyc.com/assets/penrose.jpg",
@@ -16,39 +16,19 @@ definition(
 preferences {
 
     page name: "settings"
+    page name: "thermostats"
+    page name: "methods"
+    page name: "contactsensors"
+    page name: "powersaving"
+
 }
 def settings() {
 
-    if(state.paused)
-    {
-        log.debug "new app label: ${app.label}"
-        while(app.label.contains(" (Paused) "))
-        {
-            app.updateLabel(app.label.minus("(Paused)" ))
-        }
-        app.updateLabel(app.label + ("<font color = 'red'> (Paused) </font>" ))
-    }
-    else if(app.label.contains("(Paused)"))
-    {
-        app.updateLabel(app.label.minus("<font color = 'red'> (Paused) </font>" ))
-        while(app.label.contains(" (Paused) ")){app.updateLabel(app.label.minus("(Paused)" ))}
-        log.debug "new app label: ${app.label}"
-    }
-
-    if(state.paused == true)
-    {
-        state.button_name = "resume"
-        log.debug "button name is: $state.button_name"
-    }
-    else 
-    {
-        state.button_name = "pause"
-        log.debug "button name is: $state.button_name"
-    }
+    pageNameUpdate()   
 
     def pageProperties = [
         name:       "settings",
-        title:      "Thermostats and other devices",
+        title:      "settings",
         nextPage:   null,
         install: true,
         uninstall: true
@@ -58,104 +38,238 @@ def settings() {
 
         section()
         {
-            input "pause", "button", title: "$state.button_name"
-            paragraph """
+            input "pause", "button", title: "$atomicState.button_name"
+            input "restricted", "mode", title: "Restricted modes", multiple: true
+        }
 
-"""
+        section("Main Settings") {
+            href "thermostats", title: "Thermostats and other devices", description: ""
+            href "methods", title: "Methods of evaluation", description: ""
+            href "contactsensors", title: "Contact sensors", description: ""
+            href "powersaving", title: "Power Saving Options", description: ""
+
         }
 
         section() {
             label title: "Assign a name", required: false
-            input "restricted", "mode", title: "do not run this app while in these modes", multiple: true
         }
 
-        section("Select the thermostat you want to control") { 
+        section("Actions")
+        {
+            input "run", "button", title: "RUN"
+            input "update", "button", title: "UPDATE"
+            input "poll", "button", title: "REFRESH SENSORS"
+            input "polldevices", "bool", title: "Poll devices"
+            input "enabledebug", "bool", title: "Debug", submitOnChange:true
+            if(enabledebug)
+            {
+                log.warn "debug enabled"      
+                atomicState.EnableDebugTime = now()
+                runIn(1800,disablelogging)
+                descriptiontext "debug will be disabled in 30 minutes"
+            }
+            else 
+            {
+                log.warn "debug disabled"
+            }
+            input "description", "bool", title: "Description Text", submitOnChange:true
 
+        }
+    }
+}
+def thermostats(){
+
+    def title = formatTitle("Thermostats, sensors, heaters and coolers", "white", "grey")
+
+    def pageProperties = [
+        name:       "thermostats",
+        title:      title,
+        nextPage:   "settings",
+        install: false,
+        uninstall: false
+    ]
+
+    dynamicPage(pageProperties) {
+        section("Select the thermostat you want to control")
+        { 
             input "thermostat", "capability.thermostat", title: "select a thermostat", required: true, multiple: false, description: null, submitOnChange:true
-            input "boost", "bool", title: "boost this device", submitOnChange:true
-            if(boost)
-            {
-                //input "setCmd", "bool", title: "Add a custom command string", submitOnChange:true
-                //if(setCmd)
-                //{
-                //    input "boostMode", "text", title: "Write your command"
-                //}
-                input "pw", "capability.powerMeter", title:"verify status with a power meter"
+            input "pw", "capability.powerMeter", title:"verify status with a power meter", required:false
+            input "heatpump", "bool", title: "$thermostat is a heat pump", submitOnChange:true
+        }
 
-            }
-            input "heatpump", "bool", title: "$thermostat is a heat pump or I want to add a secondary electric heater", submitOnChange:true
-            if(heatpump)
-            {
-                input "heater", "capability.switch", title: "Select a switch to control an alternate heater", required: true, submitOnChange:true, multiple: false 
-                if(heater)
-                {
-                    input "lowtemp", "number", title: "low temperature threshold", required: true, defaultValue: 30
-                }
-            }
-            input "outsideTemp", "capability.temperatureMeasurement", title: "select a weather sensor for outside temperature", required:true, submitOnChange:true
-            input "sensor", "capability.temperatureMeasurement", title: "select a temperature sensor (optional)", submitOnChange:true
-            if(!sensor)
+        section("Sensors")
+        {
+            input "outsideTemp", "capability.temperatureMeasurement", title: "Required: select a weather sensor for outside temperature", required:true, submitOnChange:true
+            input "sensor", "capability.temperatureMeasurement", title: "select a temperature sensor (optional)", submitOnChange:true, multiple:true
+            if(sensor)
             {
                 input "offrequiredbyuser", "bool", title: "turn off thermostat when desired temperature has been reached", defaultValue: false, submitOnChange:true
             }
+        }
+
+        section("Select alternate heater and/or cooler")
+        {
+            input "heater", "capability.switch", title: "Select a switch to control an alternate heater", required: true, submitOnChange:true, multiple: false 
+            if(!heatpump)
+            {
+                input "addLowTemp", "bool", title: "Use only if temperature goes down below a certain threshold", submitOnChange:true   
+            }
+            if(heatpump || addLowTemp)
+            {
+                input "lowtemp", "number", title: "low temperature threshold", required: true, defaultValue: 30
+            }
+
+            input "cooler", "capability.switch", title: "Select a switch to control an alternate cooler", required: false, submitOnChange:true, multiple: false 
+
+        }
+
+        section("Central Thermostat")
+        {
+
+            if(thermostat){
+                paragraph formatTitle("Make $thermostat a central thermostat for your home", "white", "blue")
+                input "sync", "bool", title:"Synchronize ${thermostat} with states from a different thermostat", defaultValue:false, submitOnChange:true
+                if(sync)
+                {
+                    input "thermostatB", "capability.thermostat", title: "select a second thermostat", required: true, multiple: true, description: null, submitOnChange:true
+                    input "ignoreTherModes", "bool", title: "Ignore operating modes, synchronize set points only", defaultValue: false
+                }
+            }
+        }
+    }
+}
+def methods(){
+
+    def title = formatTitle("METHODS OF EVALUTATION:", "white", "grey")
+
+    def pageProperties = [
+        name:       "methods",
+        title:      title,
+        nextPage:   "settings",
+        install: false,
+        uninstall: false
+    ]
+
+    dynamicPage(pageProperties) {
+
+        section(){
+
+            input "method", "enum", title:"select the method you want $app.name to use to adjust your thermostats cooling and heating set points", options:["dimmer","auto"],submitOnChange:true
+
+            if(method == "dimmer")
+            {
+                input "dimmer", "capability.switchLevel", title: "Use this dimmer as set point input source", required: true, submitOnChange:true
+            }
+            else if(method == "auto")
+            {
+                input "refTemp", "number", title: "Set an outside temperature reference for which you will set (below) a desired variation (for example: 77)", required: false, range: "30..100", submitOnChange:true
+                input "desiredVar", "number", title: "Set an desired variation: by how much you want inside temperature to differ from outside temp?", required:false, range: "1..20", submitOnChange:true
+                if(refTemp && desiredVar)
+                {
+                    paragraph """EXAMPLES: 
+with an outside temp of 77F your room will be cooled to ${77 - desiredVar}F 
+if outside temperature is, let's say 45F, then slope of this linear function will be reversed so to heat your room at arround 72F """
+                }
+                input "maxAutoHeat", "number", title: "Maximum heating temperature", defaultValue: 75
+                input "minAutoCool", "number", title: "Minimum cooling temperature", defaultValue: 70
+            }
+        }
+    }
+}
+def contactsensors(){
+
+    def title = formatTitle("CONTACTS AND DOORS", "white", "grey")
+
+    def pageProperties = [
+        name:       "contactsensors",
+        title:      title,
+        nextPage:   "settings",
+        install: false,
+        uninstall: false
+    ]
+
+    dynamicPage(pageProperties) {
+
+        section()
+        {
             input "contact", "capability.contactSensor", title: "Turn off everything when these contacts are open", multiple: true, required: false, submitOnChange:true
 
-            input "dimmer", "capability.switchLevel", title: "Use this dimmer as set point input source", required: true, submitOnChange:true
-            if(dimmer)
+            input "useAbedSensor", "bool", title: "Use a bed sensor", submitOnChange:true
+            if(useAbedSensor)
             {
-                input "useAbedSensor", "bool", title: "Use a bed sensor", submitOnChange:true
+                def message = ""
+
+                input "bedSensorType", "enum", title: "Which type ?", options: ["contact", "button"], submitOnChange:true, required:true
+                if(bedSensorType == "contact")
+                {
+                    def s = bedSensorContact?.size() 
+                    def i = 0
+                    input "bedSensorContact", "capability.contactSensor", title: "When ${!bedSensorContact ? "this contact is" : (s > 1 ? "these contacts are" : "this contacts is")} closed, operate in limited mode", multiple: true, required: false, submitOnChange:true
+                    def devivesStr = ""
+                    for(s!=0;i<s;i++){
+                        devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + bedSensorContact[i].toString() : bedSensorContact[i].toString()
+                    } 
+                    message = bedSensorContact ? "$app.label will work in limited mode when $devivesStr ${s > 1 ? "are" : "is"} closed and/or ${s > 1 ? "have" : "has"} been closed within 1 minute. Power saving options will not be active" : ""
+
+                }
+                else if(bedSensorType == "button")
+                {
+                    def s = bedSensorButton?.size() 
+                    def i = 0
+                    input "bedSensorButton", "capability.releasableButton", title: "When ${!bedSensorButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} held or pushed, work in limited mode", multiple: true, required: false, submitOnChange:true
+                    def devivesStr = ""
+                    for(s!=0;i<s;i++){
+                        devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + bedSensorButton[i].toString() : bedSensorButton[i].toString()
+                    } 
+                    message = bedSensorButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed or held within 1 minute. Power saving options will not be active" : ""
+                }
+                paragraph "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">${message}</div>"
+                def bedDevice = bedSensorType == "contact" ? bedSensorContact : bedSensorButton
+                input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${bedSensorType == "contact" ? "closed" : "pushed or held"}", submitOnChange:true, defaultValue:false
+
+                if(setSpecialTemp)
+                {
+                    input "specialTemp", "number", title: "Set the desired temperature", required: true
+                }
+            }
+            input "doorsManagement", "bool", title: "When some doors are open, synchronise $thermostat with a thermostat from another room", defaultValue:false, submitOnChange:true
+            if(doorsManagement)
+            {
+                input "doorsContacts", "capability.contactSensor", title: "select contact sensors", required:true, multiple:true, submitOnChange:true
+
+                input "doorThermostat", "capability.thermostat", title: "select a thermostat from a different room", required:true, submitOnChange:true
+                paragraph: "when ${doorsContacts.size()>1?"any of":""} $doorsContacts ${doorsContacts.size()>1?"are":"is"} open, $thermostat will synchornise with $doorThermostat " 
                 if(useAbedSensor)
                 {
-                    def message = ""
-
-                    input "bedSensorType", "enum", title: "Which type ?", options: ["contact", "button"], submitOnChange:true, required:true
-                    if(bedSensorType == "contact")
-                    {
-                        def s = bedSensorContact?.size() 
-                        def i = 0
-                        input "bedSensorContact", "capability.contactSensor", title: "When ${!bedSensorContact ? "this contact is" : (s > 1 ? "these contacts are" : "this contacts is")} closed, operate in limited mode", multiple: true, required: false, submitOnChange:true
-                        def devivesStr = ""
-                        for(s!=0;i<s;i++){
-                            devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + bedSensorContact[i].toString() : bedSensorContact[i].toString()
-                        } 
-                        message = bedSensorContact ? "$app.label will work in limited mode when $devivesStr ${s > 1 ? "are" : "is"} closed and/or ${s > 1 ? "have" : "has"} been closed within 1 minute. Power saving options will not be active" : ""
-
-                    }
-                    else if(bedSensorType == "button")
-                    {
-                        def s = bedSensorButton?.size() 
-                        def i = 0
-                        input "bedSensorButton", "capability.releasableButton", title: "When ${!bedSensorButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} held or pushed, work in limited mode", multiple: true, required: false, submitOnChange:true
-                        def devivesStr = ""
-                        for(s!=0;i<s;i++){
-                            devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + bedSensorButton[i].toString() : bedSensorButton[i].toString()
-                        } 
-                        message = bedSensorButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed or held within 1 minute. Power saving options will not be active" : ""
-                    }
-                    paragraph "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">${message}</div>"
-                    def bedDevice = bedSensorType == "contact" ? bedSensorContact : bedSensorButton
-                    input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${bedSensorType == "contact" ? "closed" : "pushed or held"}", submitOnChange:true, defaultValue:false
-
-                    if(setSpecialTemp)
-                    {
-                        input "specialTemp", "number", title: "Set the desired temperature", required: true
-                    }
+                    input "overrideSimpleMode", "bool", title: "This option overrides Bed Sensor"
                 }
-
-                input "doorsManagement", "bool", title: "When some doors are open, set points must align with a different dimmer", defaultValue:false, submitOnChange:true
-                if(doorsManagement)
+                if(doorsContacts)
                 {
-                    input "doorsContacts", "capability.contactSensor", title: "select contact sensors", required:true, multiple:true, submitOnChange:true
-                    paragraph: "when any of those contacts is open, temperature settings will get the value from a different dimmer" 
-                    input "doorDimmer", "capability.switchLevel", title: "select a dimmer", required:true
-                    if(useAbedSensor)
+                    input "useDifferentSetOfSensors", "bool", title: "Use a different set of sensors when ${doorsContacts} ${doorsContacts.size()>1?"are":"is"} open", submitOnChange:true
+                    if(useDifferentSetOfSensors)
                     {
-                        input "overrideSimpleMode", "bool", title: "This option overrides simple mode"
+                        input "doorSetOfSensors", "capability.temperatureMeasurement", title: "Select your sensors", multiple:true, submitOnChange:true, required:true
                     }
                 }
             }
         }
-        section("POWER SAVING")
+    }
+}
+def powersaving(){
+
+    def title = formatTitle("POWER SAVING OPTIONS","white", "grey")
+
+    def pageProperties = [
+        name:       "powersaving",
+        title:      title,
+        nextPage:   "settings",
+        install: false,
+        uninstall: false
+    ]
+
+    dynamicPage(pageProperties) {
+
+        section("Motion Management")
         {
             input "motionSensors", "capability.motionSensor", title: "Save power when there's no motion", required: false, multiple: true, submitOnChange:true
 
@@ -173,7 +287,7 @@ def settings() {
             }
         }
 
-        section("Fans and other ways to coold down your home")
+        section("Fans or Windows")
         {
             input "controlWindows", "bool", title: "Control some windows", submitOnChange:true
             if(controlWindows)
@@ -223,29 +337,37 @@ def settings() {
                 }
             }
         }
-        section()
-        {
-            input "run", "button", title: "RUN"
-            input "update", "button", title: "UPDATE"
-            input "poll", "button", title: "REFRESH"
-            input "polldevices", "bool", title: "Poll devices"
-            input "enabledebug", "bool", title: "Debug", submitOnChange:true
-            if(enabledebug)
-            {
-                log.warn "debug enabled"      
-                state.EnableDebugTime = now()
-                runIn(1800,disablelogging)
-                descriptiontext "debug will be disabled in 30 minutes"
-            }
-            else 
-            {
-                log.warn "debug disabled"
-            }
-            input "description", "bool", title: "Description Text", submitOnChange:true
-
-        }
     }
 }
+
+def pageNameUpdate(){
+    if(atomicState.paused)
+    {
+        log.debug "new app label: ${app.label}"
+        while(app.label.contains(" (Paused) "))
+        {
+            app.updateLabel(app.label.minus("(Paused)" ))
+        }
+        app.updateLabel(app.label + ("<font color = 'red'> (Paused) </font>" ))
+    }
+    else if(app.label.contains("(Paused)"))
+    {
+        app.updateLabel(app.label.minus("<font color = 'red'> (Paused) </font>" ))
+        while(app.label.contains(" (Paused) ")){app.updateLabel(app.label.minus("(Paused)" ))}
+        log.debug "new app label: ${app.label}"
+    }
+    if(atomicState.paused == true)
+    {
+        atomicState.button_name = "resume"
+        log.debug "button name is: $atomicState.button_name"
+    }
+    else 
+    {
+        atomicState.button_name = "pause"
+        log.debug "button name is: $atomicState.button_name"
+    }
+}
+
 def installed() {
     logging("Installed with settings: ${settings}")
 
@@ -264,7 +386,7 @@ def initialize(){
     if(enabledebug)
     {
         log.warn "debug enabled"      
-        state.EnableDebugTime = now()
+        atomicState.EnableDebugTime = now()
         runIn(1800,disablelogging)
         descriptiontext "debug will be disabled in 30 minutes"
     }
@@ -272,21 +394,20 @@ def initialize(){
     {
         log.warn "debug disabled"
     }
-    state.paused = false
-    state.restricted = false
-    state.lastNeed = ""
-    state.boostVal = 85
-    state.boostMode = boostMode
+    atomicState.paused = false
+    atomicState.restricted = false
+    atomicState.lastNeed = "cool"
 
-    state.setpointSentByApp = false
-    state.openByApp = true
-    state.closedByApp = true
 
-    state.boostAttempt = now() as long
-        state.offAttempt = now() as long
+    atomicState.setpointSentByApp = false
+    atomicState.openByApp = true
+    atomicState.closedByApp = true
 
-        state.lastMotionEvent = now() as long
-        state.motionEvents = 0
+    atomicState.resendAttempt = now() as long
+        atomicState.offAttempt = now() as long
+
+        atomicState.lastMotionEvent = now() as long
+        atomicState.motionEvents = 0
 
     logging("subscribing to events...")
 
@@ -294,14 +415,40 @@ def initialize(){
     subscribe(thermostat, "temperature", temperatureHandler)
     if(sensor)
     {
-        subscribe(sensor, "temperature", temperatureHandler)
+        int i = 0
+        int s = sensor.size()
+        for(s != 0; i<s;i++)
+        {
+            subscribe(sensor[i], "temperature", temperatureHandler)
+        }
     }
-    subscribe(dimmer, "level", dimmerHandler)
+    if(dimmer)
+    {
+        subscribe(dimmer, "level", dimmerHandler)
+    }
     descriptiontext "subscribed $dimmer to dimmerHandler"
     subscribe(thermostat, "heatingSetpoint", setPointHandler)
-    descriptiontext "subscribed ${thermostat}'s heatingSetpoint to setPointHandler"
     subscribe(thermostat, "coolingSetpoint", setPointHandler)
+    subscribe(thermostat, "thermostatMode", thermostatModeHandler)
+    
     descriptiontext "subscribed ${thermostat}'s coolingSetpoint to setPointHandler"
+    descriptiontext "subscribed ${thermostat}'s heatingSetpoint to setPointHandler"
+    descriptiontext "subscribed ${thermostat}'s thermostatMode to thermostatModeHandler"
+
+    if(sync && thermostatB)
+    {
+        int i = 0
+        int s = thermostatB.size()
+        for(s!= 0; i<s; i++)
+        {
+            subscribe(thermostatB[i], "heatingSetpoint", setPointHandler)
+            subscribe(thermostatB[i], "coolingSetpoint", setPointHandler)
+            subscribe(thermostatB[i], "thermostatMode", thermostatModeHandler)
+            descriptiontext "subscribed ${thermostatB[i]}'s thermostatMode to thermostatModeHandler"
+            descriptiontext "subscribed ${thermostatB[i]}'s heatingSetpoint to setPointHandler"
+            descriptiontext "subscribed ${thermostatB[i]}'s coolingSetpoint to setPointHandler"
+        }
+    }    
 
     subscribe(location, "mode", modeChangeHandler)
 
@@ -331,21 +478,21 @@ def initialize(){
     schedule("0 0/1 * * * ?", mainloop)
 
 
-    descriptiontext "INITIALIZATION DONE"
+    descriptiontext "END OF INITIALIZATION"
 
 }
 /************************************************EVT HANDLERS*********************************************************/
 def modeChangeHandler(evt){
     log.debug "$evt.name is now $evt.value"
-    state.openByApp = true
-    state.closedByApp = true  
+    atomicState.openByApp = true
+    atomicState.closedByApp = true  
 
     if(evt.value in restricted)
     {
-        state.paused = true   
-        state.restricted = true
+        atomicState.paused = true   
+        atomicState.restricted = true
     }
-    else if(state.paused == true && state.restricted == true)
+    else if(atomicState.paused == true && atomicState.restricted == true)
     {
         updated()
     }
@@ -353,9 +500,9 @@ def modeChangeHandler(evt){
 }
 def appButtonHandler(btn) {
     switch(btn) {
-        case "pause":state.paused = !state.paused
-        logging("state.paused = $state.paused")
-        if(state.paused)
+        case "pause":atomicState.paused = !atomicState.paused
+        logging("atomicState.paused = $atomicState.paused")
+        if(atomicState.paused)
         {
             log.debug "unsuscribing from events..."
             unsubscribe()  
@@ -369,11 +516,11 @@ def appButtonHandler(btn) {
             break
         }
         case "update":
-        state.paused = false
+        atomicState.paused = false
         updated()
         break
         case "run":
-        if(!state.paused) mainloop()
+        if(!atomicState.paused) mainloop()
         break
         case "poll":
         Poll()
@@ -402,30 +549,114 @@ def temperatureHandler(evt){
 def holdableButtonHandler(evt){
     log.debug "$evt.device $evt.name $evt.value"
 }
+def thermostatModeHandler(evt){
+    
+   logging """$evt.device $evt.name $evt.value
+sync ? $sync
+thermostatB: $thermostatB
+
+"""
+    if(sync && thermostatB)
+    {
+        int i = 0
+        int s = thermostatB.size()
+
+        if(!ignoreTherModes)
+        {
+            if("$evt.device" == "$thermostat")
+            {
+                //log.warn "case AM"
+                def cmd = "set${evt.name.capitalize()}"
+                for(s!=0; i<s; i++)
+                {
+                    thermostatB[i]."${cmd}"(evt.value)
+                    descriptiontext "$thermostatB[i] $cmd $evt.value"
+                }
+            }
+            else if(thermostatB.find{it.toString() == "$evt.device"})
+            {
+                //log.warn "case BM"
+                def cmd = "set${evt.name.capitalize()}"
+                thermostat."${cmd}"(evt.value)
+                descriptiontext "$thermostat $cmd $evt.value"
+            }
+        }
+        else
+        {
+            descriptiontext "ignoring operating mode sync at user request (syncing set points only)"
+        }
+    }
+}
 def setPointHandler(evt){
 
-    if(!state.setpointSentByApp)
+    log.warn """$evt.device $evt.name $evt.value
+sync ? $sync
+thermostatB: $thermostatB
+
+"""
+
+    if(sync && thermostatB)
+    {
+        def cmd = "set${evt.name.capitalize()}"
+        int i = 0
+        int s = thermostatB.size()
+        
+        
+        logging """
+thermostat = $evt.device
+evt.value = $evt.value
+evt.name = $evt.name
+${thermostat?.currentValue(evt.name) != "$evt.value"}
+
+KEEP FOR FUTURE REFERENCE!
+thermostatB current set point: ${thermostatB[0].currentValue(evt.name)} = $evt.value
+true? ${thermostatB[0].currentValue(evt.name) == evt.value.toInteger()}
+any found with same current value: ${thermostatB?.any{it -> it.currentValue(evt.name) == evt.value.toInteger()}} 
+
+
+"""
+
+        if("$evt.device" == "$thermostat")
+        {
+            log.warn "case ASP"
+            for(s!=0; i<s; i++)
+            {
+                thermostatB[i]."${cmd}"(evt.value)
+                descriptiontext "$thermostatB[i] $cmd $evt.value"
+            }
+        }
+        if(thermostatB.find{it.toString() == "$evt.device"})
+        {
+            log.warn "case BSP"
+            thermostat."${cmd}"(evt.value)
+            descriptiontext "$thermostat $cmd $evt.value"
+            //atomicState.setpointSentByApp = true
+        }
+        //return // must not set atomicState.setpointSentByApp back to false in this case
+    }
+    if(!atomicState.setpointSentByApp)
     {
         descriptiontext "new $evt.name is $evt.value---------------------------------------"
 
-        def currDim = dimmer.currentValue("level")
-        def thermMode = thermostat.currentValue("thermostatMode")
-        boolean notBoostVal = evt.value.toInteger() != state.boostVal.toInteger()
+        def currDim = dimmer?.currentValue("level")
+        def thermMode = thermostat?.currentValue("thermostatMode")
 
         // this will be true only if thermostat is heating or cooling; therefore, dimmer won't be adjusted if off 
-        // using state.lastNeed == "heat" / "cool" seemed to allow exceptions... 
+        // using atomicState.lastNeed == "heat" / "cool" seemed to allow exceptions... 
         boolean correspondingMode = (evt.name == "heatingSetpoint" && thermMode == "heat") || (evt.name == "coolingSetpoint" && thermMode == "cool")
 
-        logging"""
-state.setpointSentByApp = $state.setpointSentByApp
+        def message = """
+atomicState.setpointSentByApp = $atomicState.setpointSentByApp
 Current $dimmer value is $currDim
-state.lastNeed = $state.lastNeed   
+atomicState.lastNeed = $atomicState.lastNeed   
 evt.value = $evt.value   
-state.boostVal = ${state.boostVal.toInteger()}  
-notBoostVal: ${notBoostVal}"""
+"""
+        logging "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"
+
         boolean bedsensorclosed = bedSensorIsClosed()
         def desired = getDesired(bedsensorclosed)
-        def needData = getNeed(desired, bedsensorclosed)
+        def inside = atomicState.inside != null ? atomicState.inside : getInsideTemp()
+        def needData = getNeed(desired, bedsensorclosed, inside)
         def need = needData[1]
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
@@ -433,33 +664,33 @@ notBoostVal: ${notBoostVal}"""
         // make sure the therm event is same as current need
         // as to not apply a value from a differentiated thermostat mode (heat set to 75 will modify coolingSP and then trigger an event)
 
-        if(correspondingMode && currDim != evt.value && notBoostVal && state.setpointSentByApp == false) 
+        if(correspondingMode && currDim != evt.value) 
         {
-            runIn(3, setDimmer, [data:evt.value.toInteger()]) // important to delay this so state.setpointSentByApp doesn't get messed up
-        }
-        if(!notBoostVal)
-        {
-            log.warn "BOOST VALUE, not adjusting dimmer"   
+            if(method == "dimmer")
+            {
+                //runIn(3, setDimmer, [data:evt.value.toInteger()]) 
+                setDimmer(evt.value.toInteger())
+            }
         }
         if(!correspondingMode)
         {
-            descriptiontext "not updating dimmer because this is $evt.name and last need was $state.lastNeed"
+            descriptiontext "not updating dimmer because this is $evt.name and current mode is $thermMode"
         }
         if(currDim == evt.value)
         {
-            descriptiontext "dimmer level ok (${dimmer.currentValue("level")} == ${evt.value}"
+            descriptiontext "dimmer level ok (${dimmer?.currentValue("level")} == ${evt.value}"
         }
     }
     else
     {
         log.warn "event generated by this app, doing nothing"
     }
-    state.setpointSentByApp = false // always reset this static/class variable after calling it
-    mainloop()
+    atomicState.setpointSentByApp = false // always reset this static/class variable after calling it
+    //mainloop() // prevent feedback loops so both dimmer and thermosta set points can be modified. Changes will be made on next scheduled loop or motion events
 }
 def dimmerHandler(evt){
     descriptiontext "new dimmer level is $evt.value"
-    //mainloop() // risk of feedback loop
+    //mainloop() // prevent feedback loops so both dimmer and thermosta set points can be modified. Changes will be made on next scheduled loop or motion events
 }
 def outsideThresDimmerHandler(evt){
     descriptiontext "*********** Outside threshold value is now: $evt.value ***********"
@@ -468,15 +699,17 @@ def outsideThresDimmerHandler(evt){
 /************************************************MAIN functions*************************************************/
 def mainloop(){
 
-    if(!state.paused)
+    if(!atomicState.paused)
     {
         boolean bedsensorclosed = bedSensorIsClosed()
         int desired = getDesired(bedsensorclosed)
-        def needData = getNeed(desired, bedsensorclosed)
-        def need = needData[1]
         def inside = getInsideTemp()
-        def currSP = thermostat.currentValue("thermostatSetpoint").toInteger()
-        def thermMode = thermostat.currentValue("thermostatMode")
+        def needData = getNeed(desired, bedsensorclosed, inside)
+        def need = needData[1]
+
+        def currSP = thermostat?.currentValue("thermostatSetpoint").toInteger()
+        //log.warn "--- $currSP"
+        def thermMode = thermostat?.currentValue("thermostatMode")
         logging("need is needData[1] = $need")
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
@@ -487,27 +720,21 @@ def mainloop(){
         }
 
 
-        if(enabledebug && now() - state.EnableDebugTime > 1800000)
+        if(enabledebug && now() - atomicState.EnableDebugTime > 1800000)
         {
             descriptiontext "Debug has been up for too long..."
             disablelogging() 
         }
 
-        def therMode = thermostat.currentValue("thermostatMode")
+        def therMode = thermostat?.currentValue("thermostatMode")
         logging("$thermostat is in $therMode mode 54dfg")
 
-        if(therMode == "off")
-        {
-            state.boostOk = false
-        }
         if(pw)
         {
-            logging("$pw power meter returns ${pw.currentValue("power")}Watts")
+            logging("$pw power meter returns ${pw?.currentValue("power")}Watts")
         }
         if(therMode != "auto")
         {
-
-            state.boostVal = 85
 
             logging"""
 therMode = $therMode currSP = $currSP"
@@ -517,28 +744,6 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
             virtualThermostat(need)
 
 
-            if(boost && need in ["heat", "cool"])
-            {
-                logging("BOOST MODE!")
-
-                if(need == "heat")
-                {
-                    logging("setting state.boostVal to heating boost value")
-                    state.boostVal = 85
-
-                }
-                else if(need == "cool")
-                {
-                    logging("setting state.boostVal to cooling boost value")
-                    state.boostVal = 66
-                }
-
-                logging("state.boostVal = $state.boostVal")
-                desired = state.boostVal
-
-                desired = state.boostVal
-            }
-
             if(therMode != need)
             {
                 if(need != "off" || (need == "off" && (sensor || offrequiredbyuser)))
@@ -547,7 +752,7 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
                     logging("THERMOSTAT SET TO $need mode (587gf)")
                     if(need == "off")
                     {
-                        state.offAttempt = now() as long
+                        atomicState.offAttempt = now() as long
                             }
                 }
                 else 
@@ -560,13 +765,10 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
             {
                 logging("Thermostat already set to $need mode")
             }
+
             if(need != "off" && currSP.toInteger() != desired)
             {
-                if(boost)
-                {
-                    pauseExecution(2000)
-                }
-                state.setpointSentByApp = true
+                atomicState.setpointSentByApp = true
                 thermostat."${cmd}"(desired)   // set desired temp
                 logging("THERMOSTAT SET TO $desired (564fdevrt)")
             }
@@ -577,27 +779,29 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
 
             if(pw)
             {
+                atomicState.resendAttempt = atomicState.resendAttempt ? atomicState.resendAttempt : now()
+                atomicState.offAttempt = atomicState.offAttempt ? atomicState.offAttempt : now()
                 // here we manage possible failure for a thermostat to have received the z-wave/zigbee or http command
-                long timeElapsedSinceLastBoost = now() - state.boostAttempt
-                long timeElapsedSinceLastOff = now() - state.offAttempt // when device driver returns state off while in fact signal didn't go through
+                long timeElapsedSinceLastResend = now() - atomicState.resendAttempt
+                long timeElapsedSinceLastOff = now() - atomicState.offAttempt // when device driver returns state off while in fact signal didn't go through
                 long threshold = 4 * 60 * 1000 // give it 4 minutes to kick in before attempting new request 
-                boolean timeIsUp = timeElapsedSinceLastBoost > threshold
+                boolean timeIsUp = timeElapsedSinceLastResend > threshold
                 boolean timeIsUpOff = timeElapsedSinceLastOff > 30000
-                boolean pwLow = pw.currentValue("power") < 100 // below 100 watts we assume there's no AC compression nor resistor heat running
-                logging("time since last boost Attempt = ${timeElapsedSinceLastBoost/1000} seconds & threshold = ${threshold/1000}sec")
+                boolean pwLow = pw?.currentValue("power") < 100 // below 100 watts we assume there's no AC compression nor resistor heat running
+                logging("time since last Resend Attempt = ${timeElapsedSinceLastResend/1000} seconds & threshold = ${threshold/1000}sec")
                 logging("time since last OFF Attempt = ${timeElapsedSinceLastOff/1000} seconds & threshold = ${30}sec")
 
-                if(boost && timeIsUp && pwLow && need != "off")
+                if(timeIsUp && pwLow && need != "off")
                 {
-                    descriptiontext "$app.label is $thermostat $cmd to its boost value of ${desired}F due to inconsistency in power value"
-                    state.boostAttempt = now() as long
-                        state.setpointSentByApp = true
-                    thermostat."${cmd}"(desired) // set the desired boost temperature value
+                    descriptiontext "$app.label is resending ${cmd}(${desired}) due to inconsistency in power value"
+                    atomicState.resendAttempt = now() as long
+                        atomicState.setpointSentByApp = true
+                    thermostat."${cmd}"(desired) // resend cmd
                 }
-                else if(timeIsUpOff && need == "off" && !pwLow)
+                else if(timeIsUpOff && need == "off" && !pwLow && !doorsContactsAreOpen())
                 {
                     log.warn("$thermostat should be off but still draining power, resending cmd")
-                    state.offAttempt = now() as long
+                    atomicState.offAttempt = now() as long
                         thermostat.setThermostatMode("off")
                     thermostat.off()
                 }
@@ -618,22 +822,23 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
     }
 }
 def setDimmer(int val){
-    state.setpointSentByApp = true
+    atomicState.setpointSentByApp = true
     dimmer.setLevel(val) // reverse definition 
     descriptiontext "$dimmer set to $val BY THIS APP"
 }
 def virtualThermostat(need){
-    if(heatpump)
+    if(heatpump || addLowTemp)
     {
-        def outsideTemperature = outsideTemp.currentValue("temperature") // only needed if electric heater here
-        logging("outsideTemperature < lowtemp ? ${outsideTemperature < lowtemp}")
-        if(need == "heat" && outsideTemperature < lowtemp.toInteger())
+        def outsideTemperature = outsideTemp?.currentValue("temperature") // only needed if electric heater here
+        def lowTemperature = lowtemp ? lowtemp : 40
+        logging("outsideTemperature < lowTemperature ? ${outsideTemperature < lowTemperature}")
+        if(need == "heat" && outsideTemperature < lowTemperature.toInteger())
         {
             boolean powercap = heater.hasAttribute("power")
             logging("is heater power meter capable? $powercap")
-            boolean powerok = powercap ? (heater.currentValue("power") > 100) : true
-            logging "$heater power consumption is ${powerok ? "ok" : "not as expected"} ${powercap ? "${heater.currentValue("power")}watts" : ''}"
-            if(heater.currentValue("switch") != "on" || !powerok)
+            boolean powerok = powercap ? (heater?.currentValue("power") > 100) : true
+            logging "$heater power consumption is ${powerok ? "ok" : "not as expected"} ${powercap ? "${heater?.currentValue("power")}watts" : ''}"
+            if(heater?.currentValue("switch") != "on" || !powerok)
             {
                 logging("Turning $heater on because outside temperature is currently ${outsideTemperature}°F")
                 heater.on()   
@@ -645,9 +850,7 @@ def virtualThermostat(need){
         }
         else 
         {
-
-
-            if(heater.currentValue("switch") != "off")
+            if(heater?.currentValue("switch") != "off")
             {
                 logging("Turning $heater off")
                 heater.off()
@@ -659,56 +862,130 @@ def virtualThermostat(need){
             }
         }
     }
+    if(cooler)
+    {
+        if(need == "cool"){
+            logging "turning $cooler on"
+            cooler.on()
+        }
+        else {
+            logging "turning $cooler off"
+            cooler.off()
+        }
+    }
 }
-/************************************************INPUTS*********************************************************/
+/************************************************DECISIONS*********************************************************/
 def getDesired(bedsensorclosed){
     int desired = 70
 
     if(bedsensorclosed && setSpecialTemp)
     {
-        desired = specialTemp
-        if(!overrideSimpleMode)
+        if(doorsContactsAreOpen() && overrideSimpleMode)
         {
-            return desired
+            descriptiontext "some doors are open and this overrides bed sensor mode at user's request"
+        }
+        else 
+        {            
+            desired = specialTemp
+            return desired // END due to bed sensor mode
         }
     } 
-    if(doorsManagement && doorsContactsAreOpen())
+
+    if(method == "auto")
     {
-        desired = doorDimmer.currentValue("level")
-        def message = "$doorsContacts ${doorsContacts.size() > 1 ? "are":"is"} open. $doorDimmer is the new set point reference ${doorDimmer.currentValue("level")}"
-        logging "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"
+        desired = getAutoVal()
     }
-    else 
+    else
     {
-        desired = dimmer.currentValue("level")
+        desired = dimmer?.currentValue("level")
     }
-
-
-
-    logging("desired temperature is: $desired and current temperature is ${getInsideTemp()}")
+    descriptiontext "desired temperature is: $desired and current temperature is ${atomicState.inside}"
     return desired
 }
-def getNeed(desired, bedSensorContactClosed){
+def getAutoVal(){
 
+    def result = 73 // just a temporary default value
+    def outside = outsideTemp?.currentValue("temperature")
+    def humidity = outsideTemp?.currentValue("humidity") // outside humidity
+    def insideHum = thermostat?.currentValue("humidity") // backup value if outside sensor fails to return value (when just configured, for example)
+    humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50) // 50 is a temporary value when both devices have just been installed by user and hum value is yet to be parsed
+    def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
+    def need = atomicState.lastNeed != null ? atomicState.lastNeed : (outside >= getOutsideThershold() ? "cool" : "heat")
+    def variation = getVariationAmplitude(outside, need)
+
+    result = need == "cool" ? (humidity >= humThres ? outside - (variation+1) : outside - variation) : (need == "heat" ? (humidity >= humThres ? outside + (variation+1) : outside + variation) : "ERROR")
+
+    if(result == "ERROR") { 
+        log.warn """ERROR at getAutoVal()
+need = $need
+atomicState.lastNeed = $atomicState.lastNeed
+humidity = $humidity
+insideHum = $insideHum
+humThres = $humThres
+outside = $outside
+""" 
+        return 73
+    }
+
+    result = result > maxAutoHeat ? maxAutoHeat : result
+    result = result < minAutoCool ? minAutoCool : result 
+
+    descriptiontext "desired temperature (auto) in this room is: $result (${humidity > humThres ? "humid condition true" : "humid condition false"} outside: $outside) "
+    return result
+}
+def getVariationAmplitude(outside, need){
+
+    def max = 10 // max variation
+
+    def y = null // value to find
+    def x = outside // current temperature outside
+    def ya = desiredVar != null ? desiredVar : 1 // coressponding difference required when outside temperature = xa
+    def xa = refTemp != null ? refTemp : 77 // 
+    def slope = 0.8
+    def m = need == "cool" ? slope : (slope + 0.1)*-1  // slope 
+    //def a = -1 // offset
+
+    y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
+    y = y < max ? y : max
+    y = y < 0 ? 0 : y
+
+    log.warn "linear result for amplitude variation for auto temp = ${y.toInteger()}"
+    return y.toInteger()
+
+}
+def getNeed(desired, bedSensorContactClosed, inside){
+
+    def humidity = outsideTemp?.currentValue("humidity") 
+    def insideHum = thermostat?.currentValue("humidity") // backup for windows and value used for negative swing variation when cooling
+    humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50)
     boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !bedSensorContactClosed 
     boolean inWindowsModes = windows && location.mode in windowsModes
     boolean contactClosed = !contactsAreOpen()  
     def outsideThres = getOutsideThershold()
-    int outsideTemperature = outsideTemp.currentValue("temperature")
+    int outsideTemperature = outsideTemp?.currentValue("temperature")
     def need0 = ""
     def need1 = ""
     def need = []
-    def amplThreshold = 2
-    def inside = getInsideTemp()
+    def amplThreshold = 4
     def amplitude = Math.abs(inside - desired)
     def swing = 0.5
+    def coolswing = insideHum < 60 ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
-    boolean needCool = !bedSensorContactClosed || inWindowsModes ? ((outsideTemperature >= outsideThres || amplitudeTooHigh) && inside > desired + swing) : inside > desired + swing
-    boolean needHeat = !bedSensorContactClosed ? ((outsideTemperature < outsideThres || amplitudeTooHigh) && inside < desired - swing) : inside < desired - swing
+    boolean needCool = !bedSensorContactClosed || inWindowsModes ? ((outsideTemperature >= outsideThres || amplitudeTooHigh) && inside >= coolswing) : inside >= desired + swing
+    boolean needHeat = !bedSensorContactClosed ? ((outsideTemperature < outsideThres || amplitudeTooHigh) && inside <= desired - swing) : (inside <= desired - swing && outsideTemperature < outsideThres)
     boolean motionActive = Active() || bedSensorContactClosed
 
+    if(doorsManagement && doorsContactsAreOpen())
+    {
+        def n = doorThermostat?.currentValue("thermostatMode")
+        need0 = n.capitalize() // capital letter for later construction of the setCoolingSetpoint cmd
+        need1 = n
+        def message = "$doorsContacts ${doorsContacts.size() > 1 ? "are":"is"} open. $thermostat set to ${doorThermostat}'s mode ($n)"
+        descriptiontext "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"  
 
-    if(!INpwSavingMode && contactClosed && motionActive)
+
+    }
+    else if(!INpwSavingMode && contactClosed && motionActive)
     {
         if(needCool || needHeat)
         {
@@ -716,15 +993,15 @@ def getNeed(desired, bedSensorContactClosed){
             {
                 need0 = "Cool"// capital letter for later construction of the setCoolingSetpoint cmd
                 need1 = "cool"
-                state.lastNeed = need1
-                logging("need and state.lastNeed set to ${[need0,need1]}")
+                atomicState.lastNeed = need1
+                logging("need and atomicState.lastNeed respectively set to ${[need0,need1]}")
             }
             if(needHeat) // heating need supercedes cooling need in order to prevent amplitude paradox
             {
                 need0 = "Heat" // capital letter for later construction of the setHeatingSetpoint cmd
                 need1 = "heat"
-                state.lastNeed = need1
-                logging("need and state.lastNeed set  to ${[need0,need1]}")
+                atomicState.lastNeed = need1
+                logging("need and atomicState.lastNeed respectively set to ${[need0,need1]}")
             }
         }
         else
@@ -733,7 +1010,6 @@ def getNeed(desired, bedSensorContactClosed){
             need1 = "off"
             logging("need set to OFF")
         }
-
     }
     else   // POWER SAVING MODE OR NO MOTION OR CONTACTS OPEN     
     { 
@@ -764,43 +1040,40 @@ inside > criticalcold :  ${inside > criticalcold}
     }
 
 
-    if(windows && !bedSensorContactClosed)
+    if(windows && !bedSensorContactClosed && thermostat?.currentValue("thermostatMode") != "auto")
     {
 
-        def humidity = outsideTemp.currentValue("humidity") 
-        def insideHum = thermostat.currentValue("humidity") // backup
-        humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50)
         def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
-        boolean tooHumid = humidity >= humThres
+        boolean tooHumid = humThres < 80 ? humidity >= humThres : true
         boolean contactCapable = windows.any{it -> it.hasCapability("contact")}//?.size() == windows.size() 
-        boolean someAreOff =  contactCapable ? (windows.findAll{it.currentValue("contact") == "closed"}?.size() > 0) : (windows.findAll{it.currentValue("switch") == "off"}?.size() > 0)
-        boolean someAreOpen = contactCapable ? (windows.findAll{it.currentValue("contact") == "open"}?.size() > 0) : (windows.findAll{it.currentValue("switch") == "on"}?.size() > 0)
+        boolean someAreOff =  contactCapable ? (windows.findAll{it?.currentValue("contact") == "closed"}?.size() > 0) : (windows.findAll{it?.currentValue("switch") == "off"}?.size() > 0)
+        boolean someAreOpen = contactCapable ? (windows.findAll{it?.currentValue("contact") == "open"}?.size() > 0) : (windows.findAll{it?.currentValue("switch") == "on"}?.size() > 0)
         boolean withinRange = outsideTemperature < outsidetempwindowsH && outsideTemperature > outsidetempwindowsL // stric temp value
         boolean outsideWithinRange = withinRange && !tooHumid // same as withinRange but not too humid 
 
-        state.lastOpeningTime = state.lastOpeningTime ? state.lastOpeningTime : (state.lastOpeningTime = now()) // make sure value is not null
-        state.outsideTempAtTimeOfOpening = state.outsideTempAtTimeOfOpening ? state.outsideTempAtTimeOfOpening : outsideTemperature // make sure value is not null
-        boolean outsideTempHasDecreased = outsideTemperature < state.outsideTempAtTimeOfOpening - swing // serves mostly to reset opening time stamp
-        state.lastOpeningTime = outsideTempHasDecreased ? (state.lastOpeningTime = now()) : state.lastOpeningTime // reset opening time stamp if cooler outside
+        atomicState.lastOpeningTime = atomicState.lastOpeningTime ? atomicState.lastOpeningTime : (atomicState.lastOpeningTime = now()) // make sure value is not null
+        atomicState.outsideTempAtTimeOfOpening = atomicState.outsideTempAtTimeOfOpening ? atomicState.outsideTempAtTimeOfOpening : outsideTemperature // make sure value is not null
+        boolean outsideTempHasDecreased = outsideTemperature < atomicState.outsideTempAtTimeOfOpening - swing // serves mostly to reset opening time stamp
+        atomicState.lastOpeningTime = outsideTempHasDecreased ? (atomicState.lastOpeningTime = now()) : atomicState.lastOpeningTime // reset opening time stamp if cooler outside
 
-        state.insideTempAtTimeOfOpening = state.insideTempAtTimeOfOpening ? state.insideTempAtTimeOfOpening : inside // make sure value is not null
-        boolean insideTempHasIncreased = inside > state.insideTempAtTimeOfOpening + 1 // serves for windows wider opening + needToClose
-        state.widerOpeningDone = (state.widerOpeningDone != null) ? state.widerOpeningDone : (state.widerOpeningDone = false) // make sure value is not null
-        boolean openMore = !state.widerOpeningDone && insideTempHasIncreased && someAreOpen
+        atomicState.insideTempAtTimeOfOpening = atomicState.insideTempAtTimeOfOpening ? atomicState.insideTempAtTimeOfOpening : inside // make sure value is not null
+        boolean insideTempHasIncreased = inside > atomicState.insideTempAtTimeOfOpening + swing // serves for windows wider opening ONLY
+        atomicState.widerOpeningDone = (atomicState.widerOpeningDone != null) ? atomicState.widerOpeningDone : (atomicState.widerOpeningDone = false) // make sure value is not null
+        boolean openMore = !atomicState.widerOpeningDone && insideTempHasIncreased && someAreOpen
 
-        boolean insideTempIsHopeLess = inside > state.insideTempAtTimeOfOpening + 2 && state.widerOpeningDone
+        boolean insideTempIsHopeLess = inside > atomicState.insideTempAtTimeOfOpening + 2 && atomicState.widerOpeningDone
 
-        double lastOpeningTime = (now() - state.lastOpeningTime) / 1000 / 60 
+        double lastOpeningTime = (now() - atomicState.lastOpeningTime) / 1000 / 60 
         lastOpeningTime = lastOpeningTime.round(2)
         boolean openSinceLong = lastOpeningTime > 15.0 && someAreOpen // been open for more than 15 minutes
 
-        state.lastClosingTime = state.lastClosingTime ? state.lastClosingTime : (state.lastClosingTime = now()) // make sure value is not null
-        double lastClosingTime = (now() - state.lastClosingTime) / 1000 / 60 
+        atomicState.lastClosingTime = atomicState.lastClosingTime ? atomicState.lastClosingTime : (atomicState.lastClosingTime = now()) // make sure value is not null
+        double lastClosingTime = (now() - atomicState.lastClosingTime) / 1000 / 60 
         lastClosingTime = lastClosingTime.round(2)
         boolean closedSinceLong = lastClosingTime > 10.0 && someAreClosed // been open for more than 30 minutes
         boolean tooColdInside = inside <= desired - 4
         //closing error management for safety, if cmd didn't go through for whatever reason and temp went too low, force close the windows
-        boolean exception = someAreOpen && ((state.closedByApp && now() - lastClosingTime > 30 && tooColdInside) || (!outsideWithinRange && tooColdInside))
+        boolean exception = someAreOpen && ((atomicState.closedByApp && now() - lastClosingTime > 30 && tooColdInside) || (!outsideWithinRange && tooColdInside))
         long elapsed = now() - lastClosingTime
         def elapsedseconds = elapsed/1000
         def elapsedminutes = elapsed/1000/60
@@ -808,8 +1081,8 @@ inside > criticalcold :  ${inside > criticalcold}
 
 
         //(inside > desired + (swing +1) && openSinceLong) -> give it a chance to cool down the place
-        boolean needToClose  = (inside > desired + (swing +1) && openSinceLong) || insideTempHasIncreased || inside < desired - swing || !outsideWithinRange || insideTempIsHopeLess 
-        boolean needToOpen = inside > desired + swing && outsideWithinRange && !needToClose // too hot inside + withinrange (acounting for humidity) and no discrepency
+        boolean needToClose  = (inside > desired + (swing * 2) && openSinceLong) || inside < desired - swing || !outsideWithinRange || insideTempIsHopeLess 
+        boolean needToOpen = inside > desired + swing && outsideWithinRange && !needToClose  // too hot inside + withinrange (acounting for humidity) and no discrepency
 
         if(INpwSavingMode)
         {
@@ -821,17 +1094,17 @@ inside > criticalcold :  ${inside > criticalcold}
 **********************WINDOWS************************
 inWindowsModes = $inWindowsModes
 $windows ${!contactCapable ? "${(windows.size() > 1) ? "have":"has"} contact capability" : "${(windows.size() > 1) ? "don't have":"doesn't have"} contact capability"}
-closed: ${windows.findAll{it.currentValue("contact") == "closed"}}
-Open: ${windows.findAll{it.currentValue("contact") == "open"}}
-state.openByApp = $state.openByApp
-state.closedByApp = $state.closedByApp
+closed: ${windows.findAll{it?.currentValue("contact") == "closed"}}
+Open: ${windows.findAll{it?.currentValue("contact") == "open"}}
+atomicState.openByApp = $atomicState.openByApp
+atomicState.closedByApp = $atomicState.closedByApp
 withinRange (stritcly): $withinRange
 outsideWithinRange = $outsideWithinRange [range: $outsidetempwindowsL <> $outsidetempwindowsH]
 insideTempHasIncreased = $insideTempHasIncreased
 outsideTempHasDecreased = $outsideTempHasDecreased
-state.outsideTempAtTimeOfOpening = $state.outsideTempAtTimeOfOpening
-state.insideTempAtTimeOfOpening = $state.insideTempAtTimeOfOpening
-insideTempIsHopeLess = $insideTempIsHopeLess ${insideTempIsHopeLess ? "temp went from: $state.outsideTempAtTimeOfOpening to $inside" : ""}
+atomicState.outsideTempAtTimeOfOpening = $atomicState.outsideTempAtTimeOfOpening
+atomicState.insideTempAtTimeOfOpening = $atomicState.insideTempAtTimeOfOpening
+insideTempIsHopeLess = $insideTempIsHopeLess ${insideTempIsHopeLess ? "temp went from: $atomicState.outsideTempAtTimeOfOpening to $inside" : ""}
 amplThreshold = $amplThreshold
 needToOpen = $needToOpen
 needToClose = $needToClose
@@ -843,12 +1116,12 @@ humThres = ${humThres}
 humidity = ${humidity}%
 tooHumid = $tooHumid
 openMore = $openMore
-state.widerOpeningDone = $state.widerOpeningDone
+atomicState.widerOpeningDone = $atomicState.widerOpeningDone
 ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSinceLong ? "insideTempHasIncreased && openSinceLong" : ((inside < desired - swing) ? "inside < desired - $swing" : (!outsideWithinRange ? "!outsideWithinRange" : (insideTempIsHopeLess ? "insideTempIsHopeLess" : (!someAreOpen ? "Already closed" : "UNKNOWN!")))))}":""}
 *****************************************************
 </div>
 """
-        //state.closedByApp = true
+        //atomicState.closedByApp = true
 
         if(inWindowsModes){
 
@@ -861,10 +1134,10 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
                 if(someAreOff || openMore)
                 {
                     if(openMore) {
-                        state.widerOpeningDone = true
+                        atomicState.widerOpeningDone = true
                         unschedule(stop)
                     }
-                    if(state.closedByApp || openMore)
+                    if(atomicState.closedByApp || openMore)
                     {
                         def message = "opening $windows"
                         windows.on()
@@ -872,12 +1145,12 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
                         need1 = "off"
                         if(!openMore)
                         {
-                            state.lastOpeningTime = now()
-                            state.outsideTempAtTimeOfOpening = outsideTemperature
-                            state.insideTempAtTimeOfOpening = inside
+                            atomicState.lastOpeningTime = now()
+                            atomicState.outsideTempAtTimeOfOpening = outsideTemperature
+                            atomicState.insideTempAtTimeOfOpening = inside
                         }
-                        state.openByApp = true
-                        state.closedByApp = false
+                        atomicState.openByApp = true
+                        atomicState.closedByApp = false
 
                         if(operationTime && !openMore) // if openMore then open in full
                         {
@@ -900,17 +1173,17 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
             }
             else if(someAreOpen)
             {
-                if((state.openByApp && needToClose) || exception)
+                if((atomicState.openByApp && needToClose) || exception)
                 {
                     log.warn "closing $windows"
                     unschedule(stop)
-                    state.lastClosingTime = now() 
-                    state.widerOpeningDone = false // simple value reset
+                    atomicState.lastClosingTime = now() 
+                    atomicState.widerOpeningDone = false // simple value reset
                     windows.off()
-                    state.openByApp = false
-                    state.closedByApp = true
+                    atomicState.openByApp = false
+                    atomicState.closedByApp = true
                 }
-                else if(!state.openByApp && needToClose)
+                else if(!atomicState.openByApp && needToClose)
                 {
                     descriptiontext "$windows were not open by this app"
                 }
@@ -926,7 +1199,7 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
         else if(windows && !inWindowsModes)
         {
             logging "outside of windows modes"
-            if(someAreOpen && state.openByApp && (inside > desired + 2 || inside < desired - 2 ))
+            if(someAreOpen && atomicState.openByApp && (inside > desired + 2 || inside < desired - 2 ))
             {
                 windows.off()
             }
@@ -939,7 +1212,7 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
     }
     else if(bedSensorContactClosed)
     {
-        log.warn "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple mode is active</div>"
+        log.warn "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Bed Sensor mode is active</div>"
     }
 
     need = [need0, need1]
@@ -950,19 +1223,32 @@ inWindowsModes = $inWindowsModes
 power saving management= ${powersavingmode ? "$powersavingmode INpwSavingMode = $INpwSavingMode":"option not selected by user"}
 amplitude = $amplitude
 amplitudeTooHigh = $amplitudeTooHigh
+
+humidity = ${humidity}%
+insideHum = ${insideHum}%
+
 outside = $outsideTemperature
 inside = $inside
 desired = $desired
+
+swing = $swing
+coolswing = $coolswing
+
+inside > coolswing = ${inside > coolswing}
+inside > desired = ${inside > desired}
+inside < desired = ${inside < desired}
+
+bedSensorContactClosed = $bedSensorContactClosed
 contactClosed = $contactClosed
 outsideThres = $outsideThres
 outsideTemperature > desired = ${outsideTemperature > desired}
 outsideTemperature < desired = ${outsideTemperature < desired}
 outsideTemperature > outsideThres = ${outsideTemperature > outsideThres}
 outsideTemperature < outsideThres = ${outsideTemperature < outsideThres}
-inside > desired = ${inside > desired}
-inside < desired = ${inside < desired}
+
 needCool = $needCool
 needHeat = $needHeat (needHeat supercedes needCool) 
+
 final NEED value = $need
 ---------------------------------------
 </div>
@@ -987,12 +1273,41 @@ def getWindowsTimeOfOperation(outsideTemperature){
     return y.toInteger()
 }
 def getInsideTemp(){
-    def inside = thermostat.currentValue("temperature")
-    if(sensor)
-    {
-        inside = sensor.currentValue("temperature")
-    }
 
+    def inside = thermostat?.currentValue("temperature") 
+
+    if(doorsManagement && doorsContactsAreOpen() && doorSetOfSensors && useDifferentSetOfSensors)
+    {
+        def sum = 0
+        int i = 0
+        int s = doorSetOfSensors.size()
+        for(s != 0; i<s;i++)
+        {
+            def val = doorSetOfSensors[i]?.currentValue("temperature")
+            descriptiontext "**${doorSetOfSensors[i]} temperature is: $val"
+            sum += val
+        }
+
+        inside = sum/s
+    }
+    else if(sensor)
+    {
+        def sum = 0
+        int i = 0
+        int s = sensor.size()
+        for(s != 0; i<s;i++)
+        {
+            def val = sensor[i]?.currentValue("temperature")
+            descriptiontext "--${sensor[i]} temperature is: $val"
+            sum += val
+        }
+
+        inside = sum/s
+    }
+    descriptiontext "average temperature in this room is: $inside"
+    inside = inside.toDouble()
+    inside = inside.round(2)
+    atomicState.inside = inside
     return inside
 }
 def getOutsideThershold(){
@@ -1000,14 +1315,14 @@ def getOutsideThershold(){
     // define the outside temperature as of which heating or cooling are respectively required 
     // modulated with outside humidity 
 
-    def humidity = outsideTemp.currentValue("humidity") 
+    def humidity = outsideTemp?.currentValue("humidity") 
     humidity = humidity != null ? humidity : 50 // prevents error from recently installed thermostats
     if(humidity == null){
         def message = """$outsideTemp is not returning any humdity value - it may be because it was just included; if so, this will resolve ont its own.
 If this message still shows within an hour, check your thermostat configuration..."""
         log.warn """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"""
     }
-    def outsideTemperature = outsideTemp.currentValue("temperature")
+    def outsideTemperature = outsideTemp?.currentValue("temperature")
 
     // the higher the humidity, the lower the threshold so cooling can happen 
     def y = null // value to find
@@ -1026,9 +1341,9 @@ If this message still shows within an hour, check your thermostat configuration.
 
 }
 def getHumidityThreshold(){ // must be called only upon windows opening decision
-    def humidity = outsideTemp.currentValue("humidity") 
+    def humidity = outsideTemp?.currentValue("humidity") 
     humidity = humidity != null ? humidity : 50
-    def outsideTemperature = outsideTemp.currentValue("temperature")
+    def outsideTemperature = outsideTemp?.currentValue("temperature")
 
     // we want to set a humidity threshold depending on outside temperature
     // humidity of 98, even an outside temp of 70 will feel too warm so we don't open the windows
@@ -1041,6 +1356,7 @@ def getHumidityThreshold(){ // must be called only upon windows opening decision
     def m = -0.9 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
+    // y = y >= 78 ? 
 
     return y
 
@@ -1054,23 +1370,23 @@ def Poll(){
 
     boolean outsidePoll = outsideTemp.hasCommand("poll")
     boolean outsideRefresh = outsideTemp.hasCommand("refresh")
-    boolean override = state.override
+    boolean override = atomicState.override
 
     if(thermRefresh){
         thermostat.refresh()
-        logging("refreshing $thermostat")
+        descriptiontext("refreshing $thermostat")
     }
     if(thermPoll){
         thermostat.poll()
-        logging("polling $thermostat")
+        descriptiontext("polling $thermostat")
     }
     if(outsideRefresh){
         outsideTemp.refresh()
-        logging("refreshing $outsideTemp")
+        descriptiontext("refreshing $outsideTemp")
     }
     if(outsidePoll){
         outsideTemp.poll()
-        logging("polling $outsideTemp")
+        descriptiontext("polling $outsideTemp")
     }
 
     boolean heaterPoll = heater?.hasCommand("poll")
@@ -1078,36 +1394,47 @@ def Poll(){
 
     if(heaterRefresh){
         heater.refresh()
-        logging("refreshing $heater")
+        descriptiontext("refreshing $heater")
     }
     if(heaterPoll){
         heater.poll()
-        logging("polling $heater")
+        descriptiontext("polling $heater")
     }
 
+    if(sensor)
+    {
+        boolean sensorPoll = sensor.findAll{it.hasCommand("poll")}.size() == sensor.size()
+        boolean sensorRefresh = sensor.findAll{it.hasCommand("refresh")}.size() == sensor.size()
 
-    boolean sensorPoll = sensor?.hasCommand("poll")
-    boolean sensorRefresh = sensor?.hasCommand("refresh") 
-
-    if(sensorRefresh){
-        sensor.refresh()
-        logging("refreshing $sensor")
+        if(sensorRefresh){
+            int i = 0
+            int s = sensor.size()
+            for(s!=0;i<s;i++)
+            {
+                sensor[i].refresh()
+                descriptiontext("refreshing ${sensor[i]}")
+            }
+        }
+        if(sensorPoll){
+            int i = 0
+            int s = sensor.size()
+            for(s!=0;i<s;i++)
+            {
+                sensor[i].poll()
+                descriptiontext("polling ${sensor[i]}")
+            }
+        }
     }
-    if(sensorPoll){
-        sensor.poll()
-        logging("polling $sensor")
-    }
-
     boolean pwPoll = pw?.hasCommand("poll")
     boolean pwRefresh = pw?.hasCommand("refresh") 
 
     if(pwRefresh){
         pw.refresh()
-        logging("refreshing $pw")
+        descriptiontext("refreshing $pw")
     }
     if(pwPoll){
         sensor.poll()
-        logging("polling $pw")
+        descriptiontext("polling $pw")
     }
 
 }
@@ -1117,7 +1444,7 @@ boolean contactsAreOpen(){
     def listOpen = []
     if(contact)
     {
-        listOpen = contact?.findAll{it.currentValue("contact") == "open"}
+        listOpen = contact?.findAll{it?.currentValue("contact") == "open"}
         Open = listOpen.size() > 0
     }
 
@@ -1126,61 +1453,64 @@ boolean contactsAreOpen(){
 }
 boolean bedSensorIsClosed(){
     boolean result = false
-
-    if(bedSensorType == "contact")
+    //log.warn "useAbedSensor = $useAbedSensor"
+    if(useAbedSensor)
     {
-        def Dtime = 60000
-        int s = bedSensorContact.size() 
-        int i = 0
-        def thisDeviceEvents = []
-        int events = 0
-        def findClosed = bedSensorContact.findAll{it.currentValue("contact") == "closed"}
-        boolean currentlyClosed = findClosed.size() != 0
-        //log.warn "AnyCurrentlyActive: $AnyCurrentlyActive"
-        if(currentlyClosed) { 
-            return true 
-        }
-        else 
+        if(bedSensorType == "contact")
         {
-            for(s != 0; i < s; i++) // collect active events
+            def Dtime = 60000
+            int s = bedSensorContact.size() 
+            int i = 0
+            def thisDeviceEvents = []
+            int events = 0
+            def findClosed = bedSensorContact.findAll{it?.currentValue("contact") == "closed"}
+            boolean currentlyClosed = findClosed.size() != 0
+            //log.warn "AnyCurrentlyActive: $AnyCurrentlyActive"
+            if(currentlyClosed) { 
+                return true 
+            }
+            else 
+            {
+                for(s != 0; i < s; i++) // collect active events
+                { 
+                    thisDeviceEvents = bedSensorContact[i].eventsSince(new Date(now() - Dtime)).findAll{it.value in ["closed", "open"]} // collect ALL motion events for each sensor separately
+                    events += thisDeviceEvents.size() 
+                }
+                descriptiontext("$bedSensorContact ${s>1? "were":"was"} closed $events times in the last ${Dtime/1000} seconds")
+            }
+
+            result = events > 0
+            logging("$bedSensorContact closed ?: $result")
+        }
+        else if(bedSensorType == "button")
+        {
+            def Dtime = 60000
+            int s = bedSensorButton.size() 
+            int i = 0
+            def thisDeviceEvents = []
+            int events = 0
+
+            log.debug "******${bedSensorButton[i]} state = ${bedSensorButton[i]?.currentValue("pushed")}"
+
+            for(s != 0; i < s; i++) // collect button events
             { 
-                thisDeviceEvents = bedSensorContact[i].eventsSince(new Date(now() - Dtime)).findAll{it.value in ["closed", "open"]} // collect ALL motion events for each sensor separately
+                thisDeviceEvents = bedSensorButton[i].eventsSince(new Date(now() - Dtime)).findAll{it.name in ["held", "pushed"]} // collect ALL button events for each sensor separately
                 events += thisDeviceEvents.size() 
             }
-            descriptiontext("$bedSensorContact ${s>1? "were":"was"} closed $events times in the last ${Dtime/1000} seconds")
+            descriptiontext("$bedSensorButton ${s>1? "were":"was"} held or pushed $events times in the last ${Dtime/1000} seconds")
+
+            result = events > 0
+            logging("$bedSensorButton closed ?: $result")
         }
-
-        result = events > 0
-        logging("$bedSensorContact closed ?: $result")
-    }
-    else if(bedSensorType == "button")
-    {
-        def Dtime = 60000
-        int s = bedSensorButton.size() 
-        int i = 0
-        def thisDeviceEvents = []
-        int events = 0
-
-        log.debug "******${bedSensorButton[i]} state = ${bedSensorButton[i].currentValue("pushed")}"
-
-        for(s != 0; i < s; i++) // collect button events
-        { 
-            thisDeviceEvents = bedSensorButton[i].eventsSince(new Date(now() - Dtime)).findAll{it.name in ["held", "pushed"]} // collect ALL button events for each sensor separately
-            events += thisDeviceEvents.size() 
-        }
-        descriptiontext("$bedSensorButton ${s>1? "were":"was"} held or pushed $events times in the last ${Dtime/1000} seconds")
-
-        result = events > 0
-        logging("$bedSensorButton closed ?: $result")
     }
     return result
 }
 boolean doorsContactsAreOpen(){
     boolean Open = false
     def listOpen = []
-    if(contact)
+    if(doorsContacts)
     {
-        listOpen = doorsContacts?.findAll{it.currentValue("contact") == "open"}
+        listOpen = doorsContacts?.findAll{it?.currentValue("contact") == "open"}
         Open = listOpen.size() > 0
     }
 
@@ -1198,17 +1528,20 @@ boolean Active(){
         int i = 0
         def thisDeviceEvents = []
         int events = 0
+        boolean inMotionMode = location.mode in motionmodes
+        logging "inMotionMode = $inMotionMode"
 
-        if(location.mode in motionmodes)
+        if(inMotionMode)
         {
             for(s != 0; i < s; i++) // collect active events
             { 
-                thisDeviceEvents = motionSensors[i].eventsSince(new Date(now() - Dtime)).findAll{it.value == "active"} // collect motion events for each sensor separately
+                def device = motionSensors[i]                
+                thisDeviceEvents = device.eventsSince(new Date(now() - Dtime)).findAll{it.value == "active"} // collect motion events for each sensor separately
+                logging "Collected ${thisDeviceEvents.size()} evts for $device"
                 events += thisDeviceEvents.size() 
             }
             descriptiontext "$events active events in the last ${noMotionTime} minutes"
             result = events > 0 
-
         }
         else 
         {
@@ -1241,7 +1574,7 @@ def logging(message){
     {
         log.debug message
     }
-    if(state.EnableDebugTime == null) state.EnableDebugTime = now()
+    if(atomicState.EnableDebugTime == null) atomicState.EnableDebugTime = now()
 }
 def descriptiontext(message){
     if(description)
@@ -1252,4 +1585,8 @@ def descriptiontext(message){
 def disablelogging(){
     log.warn "debug logging disabled..."
     app.updateSetting("enabledebug",[value:"false",type:"bool"])
+}
+def formatTitle(title, textColor, bckgColor)
+{
+    return  "<div style=\"width:102%;background-color:${bckgColor};color:${textColor};padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">${title}</div>"
 }

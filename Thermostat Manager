@@ -92,6 +92,7 @@ def thermostats(){
         section("Select the thermostat you want to control")
         { 
             input "thermostat", "capability.thermostat", title: "select a thermostat", required: true, multiple: false, description: null, submitOnChange:true
+            input "forceCmd", "bool", title:"Force commands (for old non-Zwave-plus devices that don't refresh their status properly under certain mesh conditions)", defaultValue:false
             input "pw", "capability.powerMeter", title:"verify status with a power meter", required:false
             input "heatpump", "bool", title: "$thermostat is a heat pump", submitOnChange:true
         }
@@ -542,7 +543,7 @@ def contactHandler(evt){
 }
 def motionHandler(evt){
 
-    logging("$evt.device is $evt.value")
+    descriptiontext "$evt.device is $evt.value"
 
     if(evt.value == "active")
     {
@@ -556,10 +557,14 @@ def temperatureHandler(evt){
 }
 def bedSensorContactHandler(evt){
     log.info "$evt.device is $evt.value"
+    atomicState.lastBSevent = now()
 
+    if(now() - atomicState.lastBSevent > 60000) // prevent false positives due to floating state of the bed sensor due to the mattress's weight (still working on this...)
+    {
         atomicState.BedSensorSupercedes = false // if there's a new contact event, this means it is working as expected, therefore no need for the button to supercede the sensor
-        // this boolean remains false until next button event
-    
+    }
+    // this boolean remains false until next button event
+
     mainloop()
 }
 def holdableButtonHandler(evt){
@@ -746,9 +751,10 @@ def mainloop(){
         logging("need is needData[1] = $need")
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
-        if(thermMOde == "auto")
+
+        if(thermMode == "auto")
         {
-            log.info "OVERRIDE"
+            log.warn "OVERRIDE - APP PAUSED DUE TO AUTO MODE"
             return
         }
 
@@ -759,26 +765,37 @@ def mainloop(){
             disablelogging() 
         }
 
-        def therMode = thermostat?.currentValue("thermostatMode")
-        logging("$thermostat is in $therMode mode 54dfg")
-
         if(pw)
         {
             logging("$pw power meter returns ${pw?.currentValue("power")}Watts")
         }
-        if(therMode != "auto")
+        if(thermMode != "auto")
         {
 
             logging"""
-therMode = $therMode currSP = $currSP"
+thermMode = $thermMode currSP = $currSP"
 currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired} 
 """
 
             virtualThermostat(need)
-
-
-            if(therMode != need)
+            
+            atomicState.forceLimit = Math.abs(inside-desired) > 5 ? 20 : 5 // higher amount of attempts if bigger discrepancy         
+            atomicState.forceAttempts = atomicState.forceAttempts != null ? atomicState.forceAttempts : 0
+            boolean forceCommand = forceCmd ? (atomicState.forceAttempts < atomicState.forceLimit ? true : false) : false // force cmds to be sent despite current state for old shitty devices 
+            forceCommand = forceCommand ? (((thermostatOperatingState == "idle" && need != "off")||(need == cool && Math.abs(inside-desired)) > 3) ? true : false) : false // do it only if operating state doesn't match current need OR inside temp is far beyond or below need (counter argument remains priority though)
+            forceCommand = forceCmd && Math.abs(inside-desired) > 5 ? true : false // counter ignored if forceCmd user decision is true and temp discrepancy too high: continue trying until temp is ok
+            
+            
+            
+            log.trace "forceCommand ? $forceCommand atomicState.forceAttempts = $atomicState.forceAttempts | abs(inside-desired) = ${Math.abs(inside-desired)}"
+            
+            if(thermMode != need || forceCommand)
             {
+                if(forceCommand) {log.warn "FORCING CMD TO DEVICE BECAUSE $thermostat isn't parsing its states"}
+                
+                atomicState.forceAttempts += 1
+                if(atomicState.forceAttempts >= forceLimit) { runIn(1800, resetCmdForce)} // after 5 attempts, stop and retry in half an hour to prevent z-wave cmds overflow onto the device
+                
                 if(need != "off" || (need == "off" && (sensor || offrequiredbyuser)))
                 {
                     thermostat.setThermostatMode(need) // set desired mode
@@ -786,11 +803,12 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
                     if(need == "off")
                     {
                         atomicState.offAttempt = now() as long
+                            
                             }
                 }
                 else 
                 {
-                    logging("THERMOSTAT stays in $therMode mode")
+                    logging("THERMOSTAT stays in $thermMode mode")
                 }
 
             }
@@ -854,6 +872,11 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
         }
     }
 }
+def resetCmdForce()
+{
+    log.warn "Resetting forceCommand counter"
+ atomicState.forceAttempts = 0   
+}
 def setDimmer(int val){
     atomicState.setpointSentByApp = true
     dimmer.setLevel(val) // reverse definition 
@@ -909,18 +932,24 @@ def virtualThermostat(need){
 }
 /************************************************DECISIONS******************************************************/
 def getDesired(bedsensorclosed){
-    int desired = 70
+    int desired = 70 // default value
 
-    if(bedsensorclosed && setSpecialTemp)
+    if(bedsensorclosed)
     {
         if(doorsContactsAreOpen() && overrideSimpleMode)
         {
-            descriptiontext "some doors are open and this overrides bed sensor mode at user's request"
+            descriptiontext "some doors are open: bed sensor mode ignored at user's request"
         }
-        else 
+        else if(setSpecialTemp)
         {            
             desired = specialTemp
+            descriptiontext "desired temperature is: $desired and current temperature is ${atomicState.inside}"
             return desired // END due to bed sensor mode
+        }
+        else
+        {
+            descriptiontext "desired temperature is: $desired and current temperature is ${atomicState.inside}"
+            return desired // return the default value
         }
     } 
 
@@ -934,74 +963,6 @@ def getDesired(bedsensorclosed){
     }
     descriptiontext "desired temperature is: $desired and current temperature is ${atomicState.inside}"
     return desired
-}
-def getAutoVal(){
-
-    def need = atomicState.lastNeed != null ? atomicState.lastNeed : (outside >= getOutsideThershold() ? "cool" : "heat")
-    def result = 73 // just a temporary default value
-    def outside = outsideTemp?.currentValue("temperature")
-    //def humidity = outsideTemp?.currentValue("humidity") // outside humidity
-    def humidity = thermostat?.currentValue("humidity") // in auto mode we evaluate based only on inside humidity
-    humidity = humidity != null ? humidity : 50 // assume 50 as a temporary value to prevent errors when a has just been installed by user and humidity value has yet to be parsed
-    def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
-
-    def variation = getVariationAmplitude(outside, need)
-
-    result = need == "cool" ? (humidity >= humThres ? outside - (variation+1) : outside - variation) : (need == "heat" ? (humidity >= humThres ? outside + (variation+1) : outside + variation) : "ERROR")
-
-    if(result == "ERROR") { 
-        log.warn """ERROR at getAutoVal()
-need = $need
-atomicState.lastNeed = $atomicState.lastNeed
-humidity = $humidity
-insideHum = $insideHum
-humThres = $humThres
-outside = $outside
-""" 
-        return 73
-    }
-
-    def maxAH = maxAutoHeat != null ? maxAutoHeat : 75
-    def minAC = minAutoCool != null ? minAutoCool : 70
-    def minAH = minAutoHeat != null ? minAutoHeat : 70
-    def maxAC = maxAutoCool != null ? maxAutoCool : 77
-
-    logging """
-maxAH = $maxAH
-minAC = $minAC
-minAH = $minAH
-maxAC = $maxAC
-"""
-
-    result = result > maxAH && need == "heat" ? maxAH : result // in this scope need is always either "cool" or "heat", never "off" so these conditions won't be ignored
-    result = result < minAC && need == "cool" ? minAC : result
-    result = result < minAH && need == "heat" ? minAH : result
-    result = result > maxAC && need == "cool" ? maxAC : result
-
-    descriptiontext "desired temperature (auto) in this room is: $result (${humidity > humThres ? "humid condition true" : "humid condition false"} outside: $outside) "
-    return result
-}
-def getVariationAmplitude(outside, need){
-
-    //https://www.desmos.com/calculator/uc9391tw1f
-
-    //def max = 10 // max variation // deprecated: need more than 10 when heating... 
-
-    def y = null // value to find
-    def x = outside // current temperature outside
-    def ya = desiredVar != null ? desiredVar : 1 // coressponding difference required when outside temperature = xa
-    def xa = refTemp != null ? refTemp : 77 // 
-    def slope = 0.8
-    def m = need == "cool" ? slope : (slope + 0.1)*-1  // slope 
-    //def a = -1 // offset
-
-    y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
-    //y = y < max ? y : max // deprecated
-    y = y < 1 ? 1 : y
-
-    log.trace "linear result for amplitude variation for auto temp = ${y.toInteger()}"
-    return y.toInteger()
-
 }
 def getNeed(desired, bedSensorContactClosed, inside){
 
@@ -1027,12 +988,12 @@ def getNeed(desired, bedSensorContactClosed, inside){
 
     if(doorsManagement && doorsContactsAreOpen())
     {
+
         def n = doorThermostat?.currentValue("thermostatMode")
         need0 = n.capitalize() // capital letter for later construction of the setCoolingSetpoint cmd
         need1 = n
-        def message = "$doorsContacts ${doorsContacts.size() > 1 ? "are":"is"} open. $thermostat set to ${doorThermostat}'s mode ($n)"
-        descriptiontext "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"  
-
+        def message = "$doorsContacts ${doorsContacts.size() > 1 ? "are":"is"} open. $thermostat set to ${doorThermostat}'s mode ($n)"     
+        descriptiontext "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>" 
 
     }
     else if(!INpwSavingMode && contactClosed && motionActive)
@@ -1041,6 +1002,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
         {
             if(needCool)
             {
+                descriptiontext "needCool true"
                 need0 = "Cool"// capital letter for later construction of the setCoolingSetpoint cmd
                 need1 = "cool"
                 atomicState.lastNeed = need1
@@ -1048,6 +1010,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
             }
             if(needHeat) // heating need supercedes cooling need in order to prevent amplitude paradox
             {
+                descriptiontext "needHeat true"
                 need0 = "Heat" // capital letter for later construction of the setHeatingSetpoint cmd
                 need1 = "heat"
                 atomicState.lastNeed = need1
@@ -1260,12 +1223,15 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
         }
 
     }
-    else if(bedSensorContactClosed)
+
+    if((bedSensorContactClosed && !doorsContactsAreOpen()) || (doorsContactsAreOpen() && !overrideSimpleMode && bedSensorContactClosed))
     {
         log.warn "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Bed Sensor mode is active</div>"
     }
 
     need = [need0, need1]
+
+    log.trace "need = $need1"
 
     logging"""<div style=\"width:102%;background-color:#1C2BB7;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
 --------------NEED---------------------
@@ -1304,6 +1270,74 @@ final NEED value = $need
 </div>
 """
     return need
+
+}
+def getAutoVal(){
+
+    def need = atomicState.lastNeed != null ? atomicState.lastNeed : (outside >= getOutsideThershold() ? "cool" : "heat")
+    def result = 73 // just a temporary default value
+    def outside = outsideTemp?.currentValue("temperature")
+    //def humidity = outsideTemp?.currentValue("humidity") // outside humidity
+    def humidity = thermostat?.currentValue("humidity") // in auto mode we evaluate based only on inside humidity
+    humidity = humidity != null ? humidity : 50 // assume 50 as a temporary value to prevent errors when a has just been installed by user and humidity value has yet to be parsed
+    def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
+
+    def variation = getVariationAmplitude(outside, need)
+
+    result = need == "cool" ? (humidity >= humThres ? outside - (variation+1) : outside - variation) : (need == "heat" ? (humidity >= humThres ? outside + (variation+1) : outside + variation) : "ERROR")
+
+    if(result == "ERROR") { 
+        log.warn """ERROR at getAutoVal()
+need = $need
+atomicState.lastNeed = $atomicState.lastNeed
+humidity = $humidity
+insideHum = $insideHum
+humThres = $humThres
+outside = $outside
+""" 
+        return 73
+    }
+
+    def maxAH = maxAutoHeat != null ? maxAutoHeat : 75
+    def minAC = minAutoCool != null ? minAutoCool : 70
+    def minAH = minAutoHeat != null ? minAutoHeat : 70
+    def maxAC = maxAutoCool != null ? maxAutoCool : 77
+
+    logging """
+maxAH = $maxAH
+minAC = $minAC
+minAH = $minAH
+maxAC = $maxAC
+"""
+
+    result = result > maxAH && need == "heat" ? maxAH : result // in this scope need is always either "cool" or "heat", never "off" so these conditions won't be ignored
+    result = result < minAC && need == "cool" ? minAC : result
+    result = result < minAH && need == "heat" ? minAH : result
+    result = result > maxAC && need == "cool" ? maxAC : result
+
+    descriptiontext "desired temperature (auto) in this room is: $result (${humidity > humThres ? "humid condition true" : "humid condition false"} outside: $outside) "
+    return result
+}
+def getVariationAmplitude(outside, need){
+
+    //https://www.desmos.com/calculator/uc9391tw1f
+
+    //def max = 10 // max variation // deprecated: need more than 10 when heating... 
+
+    def y = null // value to find
+    def x = outside // current temperature outside
+    def ya = desiredVar != null ? desiredVar : 1 // coressponding difference required when outside temperature = xa
+    def xa = refTemp != null ? refTemp : 77 // 
+    def slope = 0.8
+    def m = need == "cool" ? slope : (slope + 0.1)*-1  // slope 
+    //def a = -1 // offset
+
+    y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
+    //y = y < max ? y : max // deprecated
+    y = y < 1 ? 1 : y
+
+    log.trace "linear result for amplitude variation for auto temp = ${y.toInteger()}"
+    return y.toInteger()
 
 }
 def getWindowsTimeOfOperation(outsideTemperature){
@@ -1504,8 +1538,14 @@ boolean contactsAreOpen(){
 boolean bedSensorIsClosed(){
     boolean result = false
     //log.warn "useAbedSensor = $useAbedSensor"
+
     if(useAbedSensor)
     {
+        if(overrideSimpleMode && doorsContactsAreOpen())
+        {
+            log.warn "Bed Sensor Mode NOT ACTIVE due to doors override"
+            return result
+        }
         if(bedSensorType == "contact" || bedSensorType == "both" )
         {
             def Dtime = 60000
@@ -1568,10 +1608,16 @@ boolean bedSensorIsClosed(){
 boolean doorsContactsAreOpen(){
     boolean Open = false
     def listOpen = []
+
     if(doorsContacts)
     {
         listOpen = doorsContacts?.findAll{it?.currentValue("contact") == "open"}
         Open = listOpen.size() > 0
+    }
+    if(Open && !overrideSimpleMode && bedSensorIsClosed())
+    {
+        descriptiontext "$doorsContacts open but bed sensor is closed"
+        return false
     }
 
     logging """$doorsContacts open ?: ${listOpen}"""

@@ -1,2 +1,2 @@
 # Thermostat-Manager
-This app allows you to control your thermostat in parallel with "A.I. Thermostat Set Point Manager" or can also work as a stand alone app too. It also allows you to manage the shenanigans of a heat pump in parallel with a regular electric heater.
+This app allows you to manage a thermostat settings in many ways, using contact sensors rules for both windows (to save power) and inside doors (to coordinate with other thermostats states), a bed sensor that can be made of a DIY touchpad set under your bed and working with contact capability or a simple button to signal the app that you want your sleeping settings to be on. This app can also control some DIY windows with switch capability and open those windows when the weather is favorable. 

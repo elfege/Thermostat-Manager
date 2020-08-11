@@ -202,7 +202,11 @@ def contactsensors(){
 
         section()
         {
-            input "contact", "capability.contactSensor", title: "Turn off everything when any of these contacts is open", multiple: true, required: false, submitOnChange:true
+            input "WindowsContact", "capability.contactSensor", title: "Turn off everything when any of these contacts is open", multiple: true, required: false, submitOnChange:true
+            if(WindowsContact)
+            {
+                input "openDelay", "number", title: "After how long?", description: "Time in seconds", required:true
+            }
 
             input "useAbedSensor", "bool", title: "Use a bed sensor", submitOnChange:true
             if(useAbedSensor)
@@ -470,9 +474,9 @@ def initialize(){
         subscribe(bedSensorButton, "held", holdableButtonHandler)   
         subscribe(bedSensorButton, "pushed", holdableButtonHandler)   
     }
-    if(contact)
+    if(WindowsContact)
     {
-        subscribe(contact, "contact", contactHandler)
+        subscribe(contact, "WindowsContact", contactHandler)
     }
     if(motionSensors)
     {
@@ -539,16 +543,13 @@ def appButtonHandler(btn) {
 }
 def contactHandler(evt){
     log.info "$evt.device is $evt.value"
+    atomicState.lastOpenEvt = now() 
     mainloop()
 }
 def motionHandler(evt){
 
     descriptiontext "$evt.device is $evt.value"
-
-    if(evt.value == "active")
-    {
-        mainloop()
-    }
+    mainloop()
 
 }
 def temperatureHandler(evt){
@@ -739,7 +740,9 @@ def mainloop(){
 
     if(!atomicState.paused)
     {
+
         boolean bedsensorclosed = bedSensorIsClosed()
+        boolean contactClosed = !contactsAreOpen()
         int desired = getDesired(bedsensorclosed)
         def inside = getInsideTemp()
         def needData = getNeed(desired, bedsensorclosed, inside)
@@ -756,6 +759,14 @@ def mainloop(){
         {
             log.warn "OVERRIDE - APP PAUSED DUE TO AUTO MODE"
             return
+        }
+        
+               
+        if(thermostat.currentValue("thermostatFanMode") == "on" && contactClosed)
+        {
+            descriptiontext "Setting fan back to auto"
+            thermostat.setThermostatFanMode("auto")
+            atomicState.fanOn = false
         }
 
 
@@ -778,24 +789,24 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
 """
 
             virtualThermostat(need)
-            
+
             atomicState.forceLimit = Math.abs(inside-desired) > 5 ? 20 : 5 // higher amount of attempts if bigger discrepancy         
             atomicState.forceAttempts = atomicState.forceAttempts != null ? atomicState.forceAttempts : 0
             boolean forceCommand = forceCmd ? (atomicState.forceAttempts < atomicState.forceLimit ? true : false) : false // force cmds to be sent despite current state for old shitty devices 
-            forceCommand = forceCommand ? (((thermostatOperatingState == "idle" && need != "off")||(need == cool && Math.abs(inside-desired)) > 3) ? true : false) : false // do it only if operating state doesn't match current need OR inside temp is far beyond or below need (counter argument remains priority though)
-            forceCommand = forceCmd && Math.abs(inside-desired) > 5 ? true : false // counter ignored if forceCmd user decision is true and temp discrepancy too high: continue trying until temp is ok
-            
-            
-            
-            log.trace "forceCommand ? $forceCommand atomicState.forceAttempts = $atomicState.forceAttempts | abs(inside-desired) = ${Math.abs(inside-desired)}"
-            
+            forceCommand = forceCommand ? (need in ["cool", "heat"] && Math.abs(inside-desired) > 3 ? true : false) : false // do it only if operating state doesn't match current need OR inside temp is far beyond or below need (counter argument remains priority though)
+            forceCommand = !forceCommand && forceCmd && Math.abs(inside-desired) > 5 ? true : (forceCommand ? true : false) // counter ignored if forceCmd user decision is true and temp discrepancy too high: continue trying until temp is ok
+
+
+
+            logging "forceCommand ? $forceCommand atomicState.forceAttempts = $atomicState.forceAttempts | abs(inside-desired) = ${Math.abs(inside-desired).round(2)}"
+
             if(thermMode != need || forceCommand)
             {
                 if(forceCommand) {log.warn "FORCING CMD TO DEVICE BECAUSE $thermostat isn't parsing its states"}
-                
+
                 atomicState.forceAttempts += 1
                 if(atomicState.forceAttempts >= forceLimit) { runIn(1800, resetCmdForce)} // after 5 attempts, stop and retry in half an hour to prevent z-wave cmds overflow onto the device
-                
+
                 if(need != "off" || (need == "off" && (sensor || offrequiredbyuser)))
                 {
                     thermostat.setThermostatMode(need) // set desired mode
@@ -803,7 +814,7 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
                     if(need == "off")
                     {
                         atomicState.offAttempt = now() as long
-                            
+
                             }
                 }
                 else 
@@ -872,10 +883,9 @@ currSP != desired -> ${currSP != desired} -> ${currSP} != ${desired}
         }
     }
 }
-def resetCmdForce()
-{
+def resetCmdForce(){
     log.warn "Resetting forceCommand counter"
- atomicState.forceAttempts = 0   
+    atomicState.forceAttempts = 0   
 }
 def setDimmer(int val){
     atomicState.setpointSentByApp = true
@@ -1028,6 +1038,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
     { 
 
         def cause = !motionActive ? "no motion" : (INpwSavingMode ? "power saving mode" : (!contactClosed ? "Contacts Open" : "UNKNOWN CAUSE - SPANK DEVELOPPER"))
+        cause = cause == "Contacts Open" ? "${cause}: ${atomicState.listOfOpenContacts}" : cause
 
         logging """
 inside < criticalhot :  ${inside < criticalhot}
@@ -1040,9 +1051,20 @@ inside > criticalcold :  ${inside > criticalcold}
 
         if(inside > criticalhot)
         {
-            log.warn """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO HOT! ($cause)</div>"""
-            need0 = "Cool"
-            need1 = "cool"
+            if(!contactClosed) // if contacts open then just fan circulate
+            {
+                log.warn "<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">FAN CIRCULATE DUE TO EXCESSIVE HEAT AND CONTACTS OPEN: $atomicState.listOfOpenContacts</div>"
+                thermostat.setThermostatFanMode("on")
+                atomicState.fanOn = true
+                need0 = "off"
+                need1 = "off"
+            }
+            else 
+            {
+                log.warn """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO HOT! ($cause)</div>"""
+                need0 = "Cool"
+                need1 = "cool"
+            }
         }
         else if(inside < criticalcold)
         {
@@ -1231,7 +1253,7 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
 
     need = [need0, need1]
 
-    log.trace "need = $need1"
+    log.trace "current need: ${need1 != "off" ? "${need1}ing" : need1}"
 
     logging"""<div style=\"width:102%;background-color:#1C2BB7;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
 --------------NEED---------------------
@@ -1255,7 +1277,7 @@ inside > desired = ${inside > desired}
 inside < desired = ${inside < desired}
 
 bedSensorContactClosed = $bedSensorContactClosed
-contactClosed = $contactClosed
+contactClosed = $contactClosed (open = $atomicState.listOfOpenContacts)
 outsideThres = $outsideThres
 outsideTemperature > desired = ${outsideTemperature > desired}
 outsideTemperature < desired = ${outsideTemperature < desired}
@@ -1526,10 +1548,15 @@ def Poll(){
 boolean contactsAreOpen(){
     boolean Open = false
     def listOpen = []
-    if(contact)
+
+    if(WindowsContact)
     {
-        listOpen = contact?.findAll{it?.currentValue("contact") == "open"}
-        Open = listOpen.size() > 0
+        atomicState.lastOpenEvt = atomicState.lastOpenEvt != null ? atomicState.lastOpenEvt : now()
+        def deltaTime = openDelay != null ? openDelay : 30 
+        listOpen = WindowsContact?.findAll{it?.currentValue("contact") == "open"}     
+        atomicState.listOfOpenContacts = "$listOpen"
+        descriptiontext "${listOpen.size() > 0 ? "Contact That are Open : atomicState.listOfOpenContacts" : "all contacts closed"}"
+        Open = listOpen.size() > 0 && now() - atomicState.lastOpenEvt > deltaTime * 1000
     }
 
     logging """$contact open ?: ${listOpen}"""

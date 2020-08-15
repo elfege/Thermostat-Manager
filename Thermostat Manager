@@ -252,14 +252,18 @@ def contactsensors(){
                 input "doorsContacts", "capability.contactSensor", title: "select contact sensors", required:true, multiple:true, submitOnChange:true
 
                 input "doorThermostat", "capability.thermostat", title: "select a thermostat from a different room", required:true, submitOnChange:true
-                paragraph: "when ${doorsContacts.size()>1?"any of":""} $doorsContacts ${doorsContacts.size()>1?"are":"is"} open, $thermostat will synchornise with $doorThermostat " 
+                if(doorsContacts && doorThermostat)
+                {
+                    paragraph "when ${doorsContacts?.size()>1?"any of":""} ${doorsContacts} ${doorsContacts?.size()>1?"are":"is"} open, $thermostat will synchornise with $doorThermostat"
+                }
                 if(useAbedSensor)
                 {
-                    input "overrideSimpleMode", "bool", title: "This option overrides Bed Sensor"
+                    input "overrideSimpleMode", "bool", title: "This option overrides ${bedSensorContact && bedSensorButton ? "$bedSensorContact && $bedSensorButton" : bedSensorButton ? "$bedSensorButton" : "$bedSensorContact" }'s events"
+
                 }
                 if(doorsContacts)
                 {
-                    input "useDifferentSetOfSensors", "bool", title: "Use a different set of sensors when ${doorsContacts} ${doorsContacts.size()>1?"are":"is"} open", submitOnChange:true
+                    input "useDifferentSetOfSensors", "bool", title: "Use a different set of temperature sensors when ${doorsContacts} ${doorsContacts.size()>1?"are":"is"} open", submitOnChange:true
                     if(useDifferentSetOfSensors)
                     {
                         input "doorSetOfSensors", "capability.temperatureMeasurement", title: "Select your sensors", multiple:true, submitOnChange:true, required:true
@@ -760,8 +764,8 @@ def mainloop(){
             log.warn "OVERRIDE - APP PAUSED DUE TO AUTO MODE"
             return
         }
-        
-               
+
+
         if(thermostat.currentValue("thermostatFanMode") == "on" && contactClosed)
         {
             descriptiontext "Setting fan back to auto"
@@ -953,12 +957,12 @@ def getDesired(bedsensorclosed){
         else if(setSpecialTemp)
         {            
             desired = specialTemp
-            descriptiontext "desired temperature is: $desired and current temperature is ${atomicState.inside}"
+            descriptiontext "desired temperature is: $desired and last recorded temperature is ${atomicState.inside}"
             return desired // END due to bed sensor mode
         }
         else
         {
-            descriptiontext "desired temperature is: $desired and current temperature is ${atomicState.inside}"
+            descriptiontext "desired temperature is: $desired and last recorded temperature is ${atomicState.inside}"
             return desired // return the default value
         }
     } 
@@ -996,7 +1000,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
     boolean needHeat = !bedSensorContactClosed ? ((outsideTemperature < outsideThres || amplitudeTooHigh) && inside <= desired - swing) : (inside <= desired - swing && outsideTemperature < outsideThres)
     boolean motionActive = Active() || bedSensorContactClosed
 
-    if(doorsManagement && doorsContactsAreOpen())
+    if(doorsManagement && doorsContactsAreOpen() && contactClosed)
     {
 
         def n = doorThermostat?.currentValue("thermostatMode")
@@ -1039,6 +1043,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
 
         def cause = !motionActive ? "no motion" : (INpwSavingMode ? "power saving mode" : (!contactClosed ? "Contacts Open" : "UNKNOWN CAUSE - SPANK DEVELOPPER"))
         cause = cause == "Contacts Open" ? "${cause}: ${atomicState.listOfOpenContacts}" : cause
+        def message = ""
 
         logging """
 inside < criticalhot :  ${inside < criticalhot}
@@ -1061,17 +1066,23 @@ inside > criticalcold :  ${inside > criticalcold}
             }
             else 
             {
-                log.warn """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO HOT! ($cause)</div>"""
+                message """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO HOT! ($cause)</div>"""
                 need0 = "Cool"
                 need1 = "cool"
             }
         }
         else if(inside < criticalcold)
         {
-            """<div style=\"width:102%;background-color:blue;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO COLD! ($cause)</div>"""
+            message = """<div style=\"width:102%;background-color:blue;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO COLD! ($cause)</div>"""
             need0 = "Heat"
             need1 = "heat"
         }
+        else 
+        {
+            message = """<div style=\"width:102%;background-color:blue;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE ($cause)</div>"""
+        }
+        log.warn message
+
     }
 
 

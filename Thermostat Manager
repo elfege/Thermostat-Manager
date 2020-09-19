@@ -1,3 +1,5 @@
+import java.text.SimpleDateFormat
+
 definition(
     name: "Thermostat Manager",
     namespace: "elfege",
@@ -303,6 +305,7 @@ def powersaving(){
                 input "criticalcold", "number", title: "Set a critical low temperature", required: true
                 input "criticalhot", "number", title: "Set a critical high temperature", required: true
             }
+            input "fancirculate", "bool", title:"Run ${thermostat}'s fan circulation when contacts are open and temp is getting too high", defaultValue:true
         }
 
         section("Fans or Windows")
@@ -351,6 +354,18 @@ def powersaving(){
                             }
 
                         }
+                    }
+
+                    if(doorsContacts && doorThermostat)
+                    {
+                        paragraph """In the 'contact sensors' settings you opted for for synchronizing your thermostat's operations 
+with another thermostat's when some door contacts are open. Do you want to also control the windows from this other thermostat's room?"""
+                        input "useOtherWindows", "bool", title: "Also control these windows when $doorsContacts are open", submitOnChange:true, defaultValue:false
+                        if(useOtherWindows)
+                        {
+                            input "otherWindows", "capability.switch", title: "Select your windows", required:true, multiple:true
+                        }
+
                     }
                 }
             }
@@ -469,6 +484,15 @@ def initialize(){
 
     subscribe(location, "mode", modeChangeHandler)
 
+    if(windows)
+    {
+        if(windows.every{element -> element.hasCapability("ContactSensor")})
+        {
+            subscribe(windows, "contact", contactHandler)
+            subscribe(windows, "contact", windowsHandler)
+            log.debug "$windows subscribed to contactHandler()"
+        }
+    }
     if(bedSensorContact)
     {        
         subscribe(bedSensorContact, "contact", bedSensorContactHandler)
@@ -480,7 +504,7 @@ def initialize(){
     }
     if(WindowsContact)
     {
-        subscribe(contact, "WindowsContact", contactHandler)
+        subscribe(WindowsContact, "contact", contactHandler)
     }
     if(motionSensors)
     {
@@ -562,24 +586,26 @@ def temperatureHandler(evt){
 }
 def bedSensorContactHandler(evt){
     log.info "$evt.device is $evt.value"
-    atomicState.lastBSevent = now()
+
+    atomicState.lastBSeventStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
 
     if(now() - atomicState.lastBSevent > 60000) // prevent false positives due to floating state of the bed sensor due to the mattress's weight (still working on this...)
     {
-        atomicState.BedSensorSupercedes = false // if there's a new contact event, this means it is working as expected, therefore no need for the button to supercede the sensor
+        atomicState.ButtonSupercedes = false // if there's a new contact event, this means it is working as expected, therefore no need for the button to supercede the sensor
     }
-    // this boolean remains false until next button event
 
+    // this boolean remains false until next button event
+    atomicState.lastBSevent = now()
     mainloop()
 }
 def holdableButtonHandler(evt){
 
-    log.debug "$evt.device $evt.name $evt.value"
+    log.debug "BUTTON EVT $evt.device $evt.name $evt.value"
 
     if(evt.name in ["pushed", "held"])
     {
-        atomicState.BedSensorSupercedes = true // this condition becomes true as soon as the user pushed or held the button so it supercedes the sensor again
-        // the sensor will retrieve its precedence as soon as it triggers an event of its own
+        atomicState.ButtonSupercedes = true // this condition becomes true as soon as the user pushed or held the button so it supercedes the sensor again
+        // the sensor will retrieve its precedence as soon as it parses a new event beyond 60 seconds since its last event 
     } 
 
     if(evt.name == "pushed" && !atomicState.buttonPushed) // if pushed and not pushed a second time
@@ -698,7 +724,9 @@ evt.value = $evt.value
 
         boolean bedsensorclosed = bedSensorIsClosed()
         def desired = getDesired(bedsensorclosed)
-        def inside = atomicState.inside != null ? atomicState.inside : getInsideTemp()
+
+        def inside = getInsideTemp()
+        atomicState.inside = atomicState.inside != null ? atomicState.inside : inside
         def needData = getNeed(desired, bedsensorclosed, inside)
         def need = needData[1]
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
@@ -733,12 +761,66 @@ evt.value = $evt.value
 }
 def dimmerHandler(evt){
     descriptiontext "new dimmer level is $evt.value"
-    //mainloop() // prevent feedback loops so both dimmer and thermosta set points can be modified. Changes will be made on next scheduled loop or motion events
+    if(method == "auto" && !atomicState.setpointSentByApp)
+    {
+        log.debug "Updating automatic settings based on new dimmer level"
+
+        def outside = outsideTemp.currentValue("temperature").toInteger()
+        def lastNeed = atomicState.lastNeed != null ? atomicState.lastNeed : (outside >= getOutsideThershold() ? "cool" : "heat")
+        def newRefTemp = outside
+
+        def newDesiredVar = lastNeed == "cool" ? Math.abs(evt.value.toInteger() - outside).toInteger() : desiredVar // keep previous value if condition not met
+        app.updateSetting("desiredVar",[value:newDesiredVar,type:"number"]) // update this setting
+        app.updateSetting("refTemp",[value:newRefTemp,type:"number"]) // we also need to update the new reference temperature in order to modify the linear equation 
+        log.info "newDesiredVar = $newDesiredVar: when temp is $outside, cooling set point will be ${outside-newDesiredVar}F"
+
+        // update min and max auto cool values
+        if(evt.value.toInteger() < minAutoCool.toInteger() )
+        {
+            def val = minAutoCool - 2 // basically this means that user wants cooler room than the minimum thres he set
+            // so we lower this setting's value a bit
+            app.updateSetting("minAutoCool",[value:newDesiredVar,type:"number"])
+        }
+
+    }
+    else if(!atomicState.setpointSentByApp)
+    {
+        log.info "NOT AUTO METHOD"
+    }
+    else if(atomicState.setpointSentByApp)
+    {
+        log.info "command coming from this app, skipping"
+    }
+
+    atomicState.setpointSentByApp = false // always reset this static/class variable after calling it
+
+    //mainloop() // prevent feedback loops so both dimmer and thermostat set points can be modified. Changes will be made on next scheduled loop or motion events
+
 }
 def outsideThresDimmerHandler(evt){
     descriptiontext "*********** Outside threshold value is now: $evt.value ***********"
     //mainloop()
 }
+def windowsHandler(evt){
+    log.debug "$evt.device is $evt.value"
+    if(evt.value == "open")
+    {
+        boolean openMore = !atomicState.widerOpeningDone && atomicState.insideTempHasIncreased
+        if(!openMore){
+        atomicState.lastOpeningTime = now()
+        }
+        atomicState.lastOpeningTimeStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
+
+    }
+    else if(evt.value == "closed")
+    {
+        atomicState.lastClosingTime = now()
+        atomicState.lastClosingTimeStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
+
+    }
+
+}
+
 /************************************************MAIN functions*************************************************/
 def mainloop(){
 
@@ -766,11 +848,11 @@ def mainloop(){
         }
 
 
-        if(thermostat.currentValue("thermostatFanMode") == "on" && contactClosed)
+        if(thermostat.currentValue("thermostatFanMode") == "on" && contactClosed && fancirculate && atomicState.fanOn)
         {
             descriptiontext "Setting fan back to auto"
             thermostat.setThermostatFanMode("auto")
-            atomicState.fanOn = false
+            atomicState.fanOn = false 
         }
 
 
@@ -895,6 +977,9 @@ def setDimmer(int val){
     atomicState.setpointSentByApp = true
     dimmer.setLevel(val) // reverse definition 
     descriptiontext "$dimmer set to $val BY THIS APP"
+
+
+
 }
 def virtualThermostat(need){
     if(heatpump || addLowTemp)
@@ -986,6 +1071,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
     boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !bedSensorContactClosed 
     boolean inWindowsModes = windows && location.mode in windowsModes
     boolean contactClosed = !contactsAreOpen()  
+    boolean doorContactsAreOpen = doorsContactsAreOpen()
     def outsideThres = getOutsideThershold()
     int outsideTemperature = outsideTemp?.currentValue("temperature")
     def need0 = ""
@@ -1000,7 +1086,8 @@ def getNeed(desired, bedSensorContactClosed, inside){
     boolean needHeat = !bedSensorContactClosed ? ((outsideTemperature < outsideThres || amplitudeTooHigh) && inside <= desired - swing) : (inside <= desired - swing && outsideTemperature < outsideThres)
     boolean motionActive = Active() || bedSensorContactClosed
 
-    if(doorsManagement && doorsContactsAreOpen() && contactClosed)
+
+    if(doorsManagement && doorContactsAreOpen && contactClosed)
     {
 
         def n = doorThermostat?.currentValue("thermostatMode")
@@ -1031,11 +1118,23 @@ def getNeed(desired, bedSensorContactClosed, inside){
                 logging("need and atomicState.lastNeed respectively set to ${[need0,need1]}")
             }
         }
-        else
+        else if(offrequiredbyuser)
         {
             need0 = "off"
             need1 = "off"
             logging("need set to OFF")
+        }
+        else if(!offrequiredbyuser)
+        {
+            need0 = atomicState.lastNeed.capitalize()
+            need1 = atomicState.lastNeed
+            log.info """Not turning off $thermostat at user's request (offrequiredbyuser = $offrequiredbyuser)
+Temperature managed by unit's inner thermostat
+need0 = $need0
+need1 = $need1
+atomicState.lastNeed = $atomicState.lastNeed
+
+"""
         }
     }
     else   // POWER SAVING MODE OR NO MOTION OR CONTACTS OPEN     
@@ -1059,8 +1158,11 @@ inside > criticalcold :  ${inside > criticalcold}
             if(!contactClosed) // if contacts open then just fan circulate
             {
                 log.warn "<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">FAN CIRCULATE DUE TO EXCESSIVE HEAT AND CONTACTS OPEN: $atomicState.listOfOpenContacts</div>"
-                thermostat.setThermostatFanMode("on")
-                atomicState.fanOn = true
+                if(fancirculate)
+                {
+                    thermostat.setThermostatFanMode("on")
+                    atomicState.fanOn = true // this global is to ensure user's override
+                }
                 need0 = "off"
                 need1 = "off"
             }
@@ -1090,12 +1192,12 @@ inside > criticalcold :  ${inside > criticalcold}
     {
 
         def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
-        boolean tooHumid = humThres < 80 ? humidity >= humThres : true
-        boolean contactCapable = windows.any{it -> it.hasCapability("contact")}//?.size() == windows.size() 
+        boolean tooHumid = humidity >= humThres 
+        boolean contactCapable = windows.any{it -> it.hasCapability("ContactSensor")}//?.size() == windows.size() 
         boolean someAreOff =  contactCapable ? (windows.findAll{it?.currentValue("contact") == "closed"}?.size() > 0) : (windows.findAll{it?.currentValue("switch") == "off"}?.size() > 0)
         boolean someAreOpen = contactCapable ? (windows.findAll{it?.currentValue("contact") == "open"}?.size() > 0) : (windows.findAll{it?.currentValue("switch") == "on"}?.size() > 0)
         boolean withinRange = outsideTemperature < outsidetempwindowsH && outsideTemperature > outsidetempwindowsL // stric temp value
-        boolean outsideWithinRange = withinRange && !tooHumid // same as withinRange but not too humid 
+        boolean outsideWithinRange = withinRange && !tooHumid // same as withinRange but with humidity
 
         atomicState.lastOpeningTime = atomicState.lastOpeningTime ? atomicState.lastOpeningTime : (atomicState.lastOpeningTime = now()) // make sure value is not null
         atomicState.outsideTempAtTimeOfOpening = atomicState.outsideTempAtTimeOfOpening ? atomicState.outsideTempAtTimeOfOpening : outsideTemperature // make sure value is not null
@@ -1104,6 +1206,7 @@ inside > criticalcold :  ${inside > criticalcold}
 
         atomicState.insideTempAtTimeOfOpening = atomicState.insideTempAtTimeOfOpening ? atomicState.insideTempAtTimeOfOpening : inside // make sure value is not null
         boolean insideTempHasIncreased = inside > atomicState.insideTempAtTimeOfOpening + swing // serves for windows wider opening ONLY
+        atomicState.insideTempHasIncreased = insideTempHasIncreased
         atomicState.widerOpeningDone = (atomicState.widerOpeningDone != null) ? atomicState.widerOpeningDone : (atomicState.widerOpeningDone = false) // make sure value is not null
         boolean openMore = !atomicState.widerOpeningDone && insideTempHasIncreased && someAreOpen
 
@@ -1126,14 +1229,17 @@ inside > criticalcold :  ${inside > criticalcold}
         if(exception) {log.warn "$windows still open! EMERGENCY CLOSING WILL BE ATTEMPTED"}
 
 
-        //(inside > desired + (swing +1) && openSinceLong) -> give it a chance to cool down the place
-        boolean needToClose  = (inside > desired + (swing * 2) && openSinceLong) || inside < desired - swing || !outsideWithinRange || insideTempIsHopeLess 
-        boolean needToOpen = inside > desired + swing && outsideWithinRange && !needToClose  // too hot inside + withinrange (acounting for humidity) and no discrepency
+        //(inside > desired + (swing * 2) && openSinceLong) -> give it a chance to cool down the place
+        boolean enoughTimeBetweenOpenAndClose = ((now() - atomicState.lastOpeningTime) / 1000 / 60) > 10.0 //-> give it a chance to cool down the place
+        boolean enoughTimeBetweenCloseAndOpen = ((now() - atomicState.lastClosingTime) / 1000 / 60) > 60.0 //-> don't reopen too soon after closing
+
+        boolean needToClose = enoughTimeBetweenOpenAndClose && ((inside > desired + (swing * 2) && openSinceLong) || inside < desired - swing || insideTempIsHopeLess)
+        needToClose = !outsideWithinRange
+        boolean needToOpen = enoughTimeBetweenCloseAndOpen && (inside > desired + swing && outsideWithinRange && !needToClose)  // too hot inside + withinrange (acounting for humidity) and no discrepency
 
         if(INpwSavingMode)
         {
-            outsideWithinRange = outsideTemperature < criticalhot && outsideTemperature > criticalcold
-            needToOpen = inside < criticalhot && inside > criticalcold && humidity <= 70 // windows must not open in saving mode if hum is too high to protect electronics 
+            needToOpen = outsideWithinRange && inside > criticalhot && inside > criticalcold 
         }
 
         logging """<div style=\"width:102%;background-color:green;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
@@ -1145,7 +1251,7 @@ Open: ${windows.findAll{it?.currentValue("contact") == "open"}}
 atomicState.openByApp = $atomicState.openByApp
 atomicState.closedByApp = $atomicState.closedByApp
 withinRange (stritcly): $withinRange
-outsideWithinRange = $outsideWithinRange [range: $outsidetempwindowsL <> $outsidetempwindowsH]
+outsideWithinRange = $outsideWithinRange [range: $outsidetempwindowsL <> $outsidetempwindowsH] ${tooHumid ? "Too humid" : ""}
 insideTempHasIncreased = $insideTempHasIncreased
 outsideTempHasDecreased = $outsideTempHasDecreased
 atomicState.outsideTempAtTimeOfOpening = $atomicState.outsideTempAtTimeOfOpening
@@ -1156,12 +1262,13 @@ needToOpen = $needToOpen
 needToClose = $needToClose
 someAreOff = $someAreOff
 someAreOpen = $someAreOpen
-last time windows were OPEN = ${lastOpeningTime < 2 ? "less than 1 minute ago" : (lastOpeningTime < 60 ? "${lastOpeningTime} minutes ago" : (lastOpeningTime < 60*2 ? "${(lastOpeningTime/60).round(2)} hour ago" : "${(lastOpeningTime/60).round(2)} hours ago"))}
-last time windows were CLOSED = ${lastClosingTime < 2 ? "less than 1 minute ago" : (lastClosingTime < 60 ? "${lastClosingTime} minutes ago" : (lastClosingTime < 60*2 ? "${(lastClosingTime/60).round(2)} hour ago" : "${(lastClosingTime/60).round(2)} hours ago"))}
+last time windows were OPEN = at $atomicState.lastOpeningTimeStamp ${lastOpeningTime < 2 ? "less than 1 minute ago" : (lastOpeningTime < 60 ? "${lastOpeningTime} minutes ago" : (lastOpeningTime < 60*2 ? "${(lastOpeningTime/60).round(2)} hour ago" : "${(lastOpeningTime/60).round(2)} hours ago"))}
+last time windows were CLOSED = $atomicState.lastClosingTimeStamp ${lastClosingTime < 2 ? "less than 1 minute ago" : (lastClosingTime < 60 ? "${lastClosingTime} minutes ago" : (lastClosingTime < 60*2 ? "${(lastClosingTime/60).round(2)} hour ago" : "${(lastClosingTime/60).round(2)} hours ago"))}
 humThres = ${humThres}
 humidity = ${humidity}%
 tooHumid = $tooHumid
 openMore = $openMore
+
 atomicState.widerOpeningDone = $atomicState.widerOpeningDone
 ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSinceLong ? "insideTempHasIncreased && openSinceLong" : ((inside < desired - swing) ? "inside < desired - $swing" : (!outsideWithinRange ? "!outsideWithinRange" : (insideTempIsHopeLess ? "insideTempIsHopeLess" : (!someAreOpen ? "Already closed" : "UNKNOWN!")))))}":""}
 *****************************************************
@@ -1183,15 +1290,21 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
                         atomicState.widerOpeningDone = true
                         unschedule(stop)
                     }
-                    if(atomicState.closedByApp || openMore)
+                    if(atomicState.closedByApp || (openMore && atomicState.openByApp))
                     {
                         def message = "opening $windows"
                         windows.on()
+                        if(doorsManagement && doorContactsAreOpen)
+                        {
+                            atomicState.otherWindowsOpenByApp = true
+                            otherWindows?.on()
+                        }
                         need0 = "off"
                         need1 = "off"
                         if(!openMore)
                         {
                             atomicState.lastOpeningTime = now()
+                            atomicState.lastOpeningTimeStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
                             atomicState.outsideTempAtTimeOfOpening = outsideTemperature
                             atomicState.insideTempAtTimeOfOpening = inside
                         }
@@ -1224,8 +1337,14 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
                     log.warn "closing $windows"
                     unschedule(stop)
                     atomicState.lastClosingTime = now() 
+                    atomicState.lastClosingTimeStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
                     atomicState.widerOpeningDone = false // simple value reset
                     windows.off()
+                    if(doorsManagement && doorContactsAreOpen && otherWindows?.currentValue("switch") == "on" && atomicState.otherWindowsOpenByApp)
+                    {
+                        atomicState.otherWindowsOpenByApp = false
+                        otherWindows?.off()
+                    }
                     atomicState.openByApp = false
                     atomicState.closedByApp = true
                 }
@@ -1248,6 +1367,13 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
             if(someAreOpen && atomicState.openByApp && (inside > desired + 2 || inside < desired - 2 ))
             {
                 windows.off()
+                atomicState.openByApp = false
+                atomicState.closedByApp = true
+                if(doorsManagement && doorContactsAreOpen && otherWindows?.currentValue("switch") == "on")
+                {
+                    otherWindows?.off()
+                    atomicState.otherWindowsOpenByApp = false
+                }
             }
         }
         else if(windows && bedSensorContactClosed)
@@ -1256,10 +1382,18 @@ ${needToClose ? "CLOSING WINDOWS BECAUSE: ${(insideTempHasIncreased && openSince
         }
 
     }
-
-    if((bedSensorContactClosed && !doorsContactsAreOpen()) || (doorsContactsAreOpen() && !overrideSimpleMode && bedSensorContactClosed))
+    boolean doorsOpen = doorsContactsAreOpen()
+    if((bedSensorContactClosed && !doorsOpen) || (doorsOpen && !overrideSimpleMode && bedSensorContactClosed))
     {
-        log.warn "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Bed Sensor mode is active</div>"
+        log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Bed Sensor mode is active</div>"
+    }
+    else if(useAbedSensor && bedSensorContactClosed && overrideSimpleMode && doorsOpen)
+    {
+        log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Bed Sensor pressed but NOT active due to doors</div>"
+    }
+    else if(useAbedSensor)
+    {
+        log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Bed Sensor NOT pressed</div>"
     }
 
     need = [need0, need1]
@@ -1287,7 +1421,7 @@ inside > coolswing = ${inside > coolswing}
 inside > desired = ${inside > desired}
 inside < desired = ${inside < desired}
 
-bedSensorContactClosed = $bedSensorContactClosed
+bedSensorContactClosed = $bedSensorContactClosed (bedSensorType = $bedSensorType)
 contactClosed = $contactClosed (open = $atomicState.listOfOpenContacts)
 outsideThres = $outsideThres
 outsideTemperature > desired = ${outsideTemperature > desired}
@@ -1302,6 +1436,7 @@ final NEED value = $need
 ---------------------------------------
 </div>
 """
+
     return need
 
 }
@@ -1356,6 +1491,7 @@ def getVariationAmplitude(outside, need){
     //https://www.desmos.com/calculator/uc9391tw1f
 
     //def max = 10 // max variation // deprecated: need more than 10 when heating... 
+    //log.warn "desiredVar = $desiredVar"
 
     def y = null // value to find
     def x = outside // current temperature outside
@@ -1468,9 +1604,9 @@ def getHumidityThreshold(){ // must be called only upon windows opening decision
 
     def y = null // value to find
     def x = outsideTemperature 
-    def ya = 90 // coressponding humidity threshold for when humidity = xa
-    def xa = 60
-    def m = -0.9 // slope / coef
+    def ya = 70 // coressponding humidity threshold for when humidity = xa
+    def xa = 70
+    def m = -3 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
     // y = y >= 78 ? 
@@ -1575,15 +1711,12 @@ boolean contactsAreOpen(){
 }
 boolean bedSensorIsClosed(){
     boolean result = false
-    //log.warn "useAbedSensor = $useAbedSensor"
+    //boolean doorOpen = doorsContactsAreOpen() // FEEDBACK LOOP since doorsContactsAreOpen() function calls bedSensorIsClosed()
+    boolean currentlyClosed = false 
 
     if(useAbedSensor)
     {
-        if(overrideSimpleMode && doorsContactsAreOpen())
-        {
-            log.warn "Bed Sensor Mode NOT ACTIVE due to doors override"
-            return result
-        }
+
         if(bedSensorType == "contact" || bedSensorType == "both" )
         {
             def Dtime = 60000
@@ -1592,55 +1725,73 @@ boolean bedSensorIsClosed(){
             def thisDeviceEvents = []
             int events = 0
             def findClosed = bedSensorContact.findAll{it?.currentValue("contact") == "closed"}
-            boolean currentlyClosed = findClosed.size() != 0
+            currentlyClosed = findClosed.size() != 0
 
-            atomicState.BedSensorSupercedes = atomicState.BedSensorSupercedes != null ? atomicState.BedSensorSupercedes : true
+            atomicState.ButtonSupercedes = atomicState.ButtonSupercedes != null ? atomicState.ButtonSupercedes : true
+            atomicState.lastBSeventStamp = atomicState.lastBSeventStamp != null ? atomicState.lastBSeventStamp : new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
 
-            if(bedSensorType == "both" && atomicState.BedSensorSupercedes)
+            def loggingMessage = """
+BED SENSOR DATA
+currentlyClosed = $currentlyClosed
+atomicState.ButtonSupercedes = $atomicState.ButtonSupercedes
+last bed sensor contact event = ${atomicState.lastBSeventStamp}
+
+"""
+            log.debug (formatTitle(loggingMessage, "white", "#39CC37"))
+
+            if(bedSensorType == "both")
             {                
 
                 if(atomicState.buttonPushed)
                 {
                     descriptiontext "atomicState.buttonPushed = $atomicState.buttonPushed"
-                    return true
+                    result = true
                 }
                 else 
                 {
                     descriptiontext "atomicState.buttonPushed = $atomicState.buttonPushed"
-                    return false
+                    result = false
                 }
-
+                if(atomicState.ButtonSupercedes) return result
             }
 
-            if(currentlyClosed) { 
-                return true 
+            if(currentlyClosed && atomicState.buttonPushed) { // if contact is closed AND button pushed, return true
+                result = true 
             }
-            else 
+            else // if not, then evaluate recent events and if there are recent contact events, someone is indeed on the bed
             {
                 for(s != 0; i < s; i++) // collect active events
                 { 
                     thisDeviceEvents = bedSensorContact[i].eventsSince(new Date(now() - Dtime)).findAll{it.value in ["closed", "open"]} // collect ALL motion events for each sensor separately
                     events += thisDeviceEvents.size() 
                 }
-                descriptiontext("$bedSensorContact ${s>1? "were":"was"} closed $events times in the last ${Dtime/1000} seconds")
+                descriptiontext "$bedSensorContact ${s>1? "were":"was"} closed $events times in the last ${Dtime/1000} seconds"
+                result = events > 0
+                logging("$bedSensorContact closed ?: $result")
             }
 
-            result = events > 0
-            logging("$bedSensorContact closed ?: $result")
         }
         else if(bedSensorType == "button")
         {
-            descriptiontext "atomicState.buttonPushed = $atomicState.buttonPushed"
+            descriptiontext "-- atomicState.buttonPushed = $atomicState.buttonPushed"
             if(atomicState.buttonPushed)
             {
-                return true
+                result = true
             }
             else 
             {
-                return false
+                result = false
             }
         }
+        /*
+if(overrideSimpleMode && doorOpen && result == true) // FEEDBACK LOOP since doorsContactsAreOpen() function calls bedSensorIsClosed()
+{
+log.warn "Bed Sensor Mode CANCELED due to doors override"
+result = false
+}
+*/
     }
+    logging "bed sensor boolean returns $result"
     return result
 }
 boolean doorsContactsAreOpen(){
@@ -1654,7 +1805,7 @@ boolean doorsContactsAreOpen(){
     }
     if(Open && !overrideSimpleMode && bedSensorIsClosed())
     {
-        descriptiontext "$doorsContacts open but bed sensor is closed"
+        descriptiontext "$doorsContacts open but $bedSensorContact is closed and user doesn't wish to override"
         return false
     }
 
@@ -1704,8 +1855,25 @@ def stop(){
 
     if(customCommand)
     {
-        log.warn "$windows $customCommand"
-        windows.stop() //"${customCommand}"
+
+        def cmd = customCommand.minus("()")
+        int s = windows.size()
+        int i = 0
+        for(s!=0;i<s;i++)
+        {
+            windows[i]."${cmd}"()
+            log.warn "${windows[i]} $customCommand"
+        }
+        if(doorsManagement && doorContactsAreOpen && atomicState.otherWindowsOpenByApp)
+        {
+            s = otherWindows.size()
+            i = 0
+            for(s!=0;i<s;i++)
+            {
+                otherWindows[i]."${cmd}"()
+                log.warn "${otherWindows[i]} $customCommand"
+            }
+        }
     }
     else
     {

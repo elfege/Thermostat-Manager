@@ -7,4 +7,4 @@ This app allows you to manage a thermostat settings in many ways. You can:
 5) You can also use the intelligent automatic evaluation of your needs (in that case you won't need a virtual dimmer): let the app set everything for you. This algorithm is meant to optimize both power saving and comfort, but it can also be customized. 
 
 
-NB: You'll need to have a weather station for this app to work. 
+NB: You'll need to have a weather station or a temperature sensor located outside your home for this app to work properly. 

@@ -167,11 +167,10 @@ def methods(){
             }
             input "method", "enum", title:"select the method you want $app.name to use to adjust your thermostats cooling and heating set points", options:["dimmer","auto"],submitOnChange:true
 
-            if(method == "dimmer")
-            {
-                input "dimmer", "capability.switchLevel", title: "Use this dimmer as set point input source", required: true, submitOnChange:true
-            }
-            else if(method == "auto")
+            //used by both methods
+            input "dimmer", "capability.switchLevel", title: "Use this dimmer as set point input source", required: false, submitOnChange:true
+
+            if(method == "auto")
             {
                 def reF = outsideTemp ? outsideTemp.currentValue("temperature") : 77
                 def des = 2
@@ -195,26 +194,24 @@ In heating mode, the function will work with a different method to make sure to 
                 input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue: 77
             }
 
-            input "antifreeze", "bool", title:"Activate Anti Freeze",submitOnChange:true,defaultValue:true
+            input "antifreeze", "bool", title:"Optional: Customize Antifreeze",submitOnChange:true,defaultValue:true
+            input "backupSensor", "capability.temperatureMeasurement", title: "Optional but highly recommended: pick a backup sensor (in case of network failure)", required:false
+
             if(antifreeze)
             {
                 input "safeValue", "number", title: "safety temperature", required:true
-                input "backupSensor", "capability.temperatureMeasurement", title: "Optional but highly recommended: pick a backup sensor (in case of network failure)", required:false
-
-                input "sendAlert", "bool", title: "Send a sound notification", submitOnChange:true
-                if(sendAlert)
+            }
+            input "sendAlert", "bool", title: "Send a sound and/or text notification when temperature goes below antifreeze safety", submitOnChange:true
+            if(sendAlert)
+            {
+                input "speech", "capability.speechSynthesis", title: "Select your speech device", multiple:true, required:false, submitOnChange: true 
+                input "speaker", "capability.audioNotification", title: "Select your speakers", multiple:true, required:false, submitOnChange: true 
+                if(speaker)
                 {
-                    input "speech", "capability.speechSynthesis", title: "Select your speech device", multiple:true, required:false, submitOnChange: true 
-                    input "speaker", "capability.audioNotification", title: "Select your speakers", multiple:true, required:true, submitOnChange: true 
-                    if(speaker)
-                    {
-                        input "volumeLevel", "number", title: "Set the volume level", range: "0..100",required:true, submitOnChange: true 
-                        input "textToSpeak", "text", title: "Text to speak", required:true, submitOnChange: true 
-                    }
-
-
-                    input "notification", "capability.notification", title: "Select notification devices", multiple:true, required:false, submitOnChange: true 
+                    input "volumeLevel", "number", title: "Set the volume level", range: "0..100",required:true, submitOnChange: true  
                 }
+                input "initializeDevices", "bool", title:"Try to fix unresponsive speakers (such as Chrome's)", defaultValue:false
+                input "notification", "capability.notification", title: "Select notification devices", multiple:true, required:false, submitOnChange: true 
             }
         }
     }
@@ -275,7 +272,7 @@ def contactsensors(){
                         } 
                         if(bedSensorTimeLimit)
                         {
-                            message = "Limited mode will be canceled after $bedSensorTimeLimit hours or after a new button event. Note that $devivesStr will not be able to cancel limited mode before time is out" 
+                            message = "Limited mode will be canceled after $bedSensorTimeLimit hours or after a new button event" //. Note that $devivesStr will not be able to cancel limited mode before time is out" 
                             paragraph formatText(message, "white", "grey") 
                         }
                         message = bedSensorButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed and canceled when held, double tapped or pushed again. Power saving options will not be active. ${bedSensorType == "both" ? "Note taht $bedSensorButton supercede $bedSensorContact":""}" : ""
@@ -345,7 +342,7 @@ def powersaving(){
                 input "motionmodes", "mode", title: "Consider motion only in these modes", multiple: true, required: true 
             }  
 
-            if(powersavingmode)
+            if(powersavingmode || motionSensors)
             {
                 input "criticalcold", "number", title: "Set a critical low temperature", required: true
                 input "criticalhot", "number", title: "Set a critical high temperature", required: true
@@ -486,6 +483,7 @@ def initialize(){
         atomicState.offAttempt = now() as long
 
         atomicState.lastMotionEvent = now() as long
+        atomicState.lastNotification = now() as long
         atomicState.motionEvents = 0
 
     logging("subscribing to events...")
@@ -1029,47 +1027,22 @@ def mainloop(){
             log.warn "ANTI FREEZE HAS BEEN TRIGGERED"
         }
         // antifreeze precaution (runs after calling atomicState.antifreeze on purpose here)
+        def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature").toInteger() : inside
         if(antifreeze){
-            def val = safeValue != null ? safeValue : criticalcold != null ? criticalcold : 67
-            def dimVal = dimmer.currentValue("level")
-            log.debug "dimVal = $dimVal dimVal <= val ? ${dimVal <= val}"
-            def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature").toInteger() : inside
+            def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : 67
 
-            if(inside <= val || backupSensorTemp <= val || dimVal <= val){
+            if(inside <= safeVal || backupSensorTemp <= safeVal){
+
                 atomicState.antifreeze = true
 
-                log.warn "safeValue = $val"
-                if(dimVal <= val) {
-                    setDimmer(val.toInteger() + 2)
-                    log.warn "ANTI FREEZE ACTIVATED BECAUSE dimmer (${dimmer}) VALUE WAS FAR TOO LOW"
-                }
-                log.warn "$thermostat setpoint set to ${val} as ANTI FREEZE VALUE"
+                log.warn """$thermostat setpoint set to 72 as ANTI FREEZE VALUE
+inside = $inside
+safeValue = $safeVal
+"""
                 thermostat.setThermostatMode("heat")
-                thermostat.setHeatingSetpoint(val + 2)
-                if(speaker || speech)
-                {
-                    atomicState.lastPlay = atomicState.lastPlay != null ? atomicState.lastPlay : now()
-
-                    if(now() - atomicState.lastPlay > 60000)
-                    {
-                        atomicState.lastPlay = now()
-                        log.trace "playing '${textToSpeak}' with volume level: $volumeLevel" 
-
-                        if(speaker.every{element -> element.hasCapability("MusicPlayer")})
-                        {
-                            speaker.setLevel(volumeLevel.toInteger())
-                            pauseExecution(500)
-                            speaker?.playTextAndRestore(textToSpeak) 
-                            speech?.speak(textToSpeak)
-                        }
-                        else 
-                        {
-                            speaker?.playTextAndRestore(textToSpeak, volumeLevel.toInteger())
-                            speech?.speak(textToSpeak)                            
-                        }
-                        notification?.deviceNotification(textToSpeak)
-                    }
-                }
+                thermostat.setHeatingSetpoint(72)
+                windows?.off() // make sure all windows linked to this instance are closed
+                sendNotification()
                 return
             }
             else if(atomicState.antifreeze)
@@ -1079,12 +1052,33 @@ def mainloop(){
             }
 
         }
+        else // mandatory anti freeze
+        {
+            def defaultSafeTemp = criticalcold == null ? 58 : criticalcold <= 58 ? criticalcold : 58 
+            if(inside <= defaultSafeTemp || backupSensorTemp <= defaultSafeTemp){
+                log.warn """ANTIFREEZE (DEFAULT) IS TRIGGERED: 
+inside = $inside
+backupSensorTemp = $backupSensorTemp
+defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${criticalcold == null ? false : true}
+"""
+                windows?.off() // make sure all windows linked to this instance are closed
+                thermostat.setThermostatMode("heat")
+                thermostat.setHeatingSetpoint(72)
+                atomicState.antifreeze = true
+                sendNotification()
+            }
+            else
+            {
+                atomicState.antifreeze = false
+            }
+        }
         if(autoOverride && thermMode == "auto"){
             atomicState.override = true // wanted redundancy for the rare cases when evt handler failed
-            def timeLimit = overrideDuration.toInteger() * 60 * 60 * 1000
+            def overrideDur = overrideDuration != null ? overrideDuration : 0
+            def timeLimit = overrideDur * 60 * 60 * 1000
             def timeStamp = atomicState.overrideTime
 
-            if(overrideDuration.toInteger() != 0 && overrideDuration != null)
+            if(overrideDur != 0 && overrideDur != null)
             {
                 if(now() - timeStamp > timeLimit)
                 {
@@ -1094,12 +1088,12 @@ def mainloop(){
                 }
                 else 
                 {
-                    log.warn "OVERRIDE - AUTO MODE - remaining time: ${calcRemainTime(overrideDuration, atomicState.overrideTime)}"
+                    log.warn "OVERRIDE - AUTO MODE - remaining time: ${getRemainTime(overrideDur, atomicState.overrideTime)}"
                 }
             }
             else 
             {
-                log.warn "OVERRIDE - APP PAUSED DUE TO AUTO MODE"
+                log.warn "OVERRIDE - APP PAUSED DUE TO AUTO MODE (no time limit)"
                 return
             }
         }
@@ -1133,8 +1127,8 @@ thermostat.currentValue("thermostatOperatingState") = ${thermostat.currentValue(
 ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
 """
             // control discrepancy when thermostat measures a temp equal to desired temp while it's not the case on the alternate sensor
-            boolean thermTempDiscrepancy = need == "cool" ? thermostat.currentValue("temperature") == desired : need == "heat" ? thermostat.currentValue("temperature") == desired : false
-            //thermTempDiscrepancy = thermTempDiscrepancy && contactClosed && !doorContactsAreOpen ? thermTempDiscrepancy : false
+            boolean thermTempDiscrepancy = need in ["cool", "heat"] ? thermostat.currentValue("temperature") == desired : false
+            thermTempDiscrepancy = contactClosed && !doorContactsAreOpen ? thermTempDiscrepancy : false
             boolean OperatingStateOk = contactClosed && !doorContactsAreOpen ? thermostat.currentValue("thermostatOperatingState") in [currentOperatingNeed, "fanCirculate"] : true
 
             logging "thermTempDiscrepancy = $thermTempDiscrepancy currentOperatingNeed = $currentOperatingNeed | current state = ${thermostat.currentValue("thermostatOperatingState")}"
@@ -1161,7 +1155,7 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
             if(thermMode != need || forceCommand)
             {
                 if(forceCommand && OperatingStateOk) {log.warn "FORCING CMD TO DEVICE BECAUSE temperature difference is TOO HIGH"}
-                if(forceCommand && !OperatingStateOk && !thermTempDiscrepancy) {log.warn "FORCING CMD TO DEVICE BECAUSE current operating state is INCONSISTENT"}
+                if(forceCommand && !OperatingStateOk && !thermTempDiscrepancy) {logging "FORCING CMD TO DEVICE BECAUSE current operating state is INCONSISTENT"}
 
                 atomicState.forceAttempts += 1
                 if(atomicState.forceAttempts >= forceLimit) { runIn(1800, resetCmdForce)} // after 5 attempts, stop and retry in half an hour to prevent z-wave cmds overflow onto the device
@@ -1268,6 +1262,7 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
                     atomicState.offAttempt = now() as long
                         thermostat.setThermostatMode("off")
                     thermostat.off()
+                    Poll()
                 }
                 else if((!pwLow &&  need in ["heat", "cool"]) || (need == "off" && pwLow))
                 {
@@ -1288,14 +1283,108 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
         log.info "app in restricted mode, doing nothing"
     }
 }
+def sendNotification(){
+    def message = "Temperature is too low at $thermostat, antifreeze is now active. Please make sure everything is ok"
+
+    atomicState.lastNotification = atomicState.lastNotification != null ? atomicState.lastNotification : now()
+
+    def dTime = 5*60*1000 // every 5 minutes
+
+    if(now() - atomicState.lastNotification >= dTime || 1==1)
+    {
+        atomicState.lastNotification = now()
+
+        def speakers = speaker ? buildDebugString(speaker) : ""
+        def speeches = speech ? buildDebugString(speech) : ""
+        def notifDevices = notification ? buildDebugString(notification) : ""
+
+        def notifLogs = "${notification && speaker && speech ? "to ${notifDevices}, ${speakers}, ${speeches}" : notification && speaker ? "to ${notifDevices}, ${speakers}" : notification && speech ? "to ${notifDevices}, ${speechesspeeches}" : speaker && speech ? "to ${speakers}, ${speeches}" : speaker ? "to ${speakers}" : speech ? "to ${speeches}" : ""}" 
+
+        def debugMessage = "message to be sent: '${message} ${notifLogs}" 
+
+        descriptiontext formatText(debugMessage, "white", "red")
+
+        if(notification)
+        {
+            notification.deviceNotification(message)
+        }
+        else
+        {
+            log.info "User did not select any text notification device"
+        }
+        if(speaker || speech)
+        {
+            if(speaker)
+            {
+                if(initializeDevices)
+                {
+                    int i = 0
+                    int s = speaker.size()
+                    def device 
+                    for(s!=0;i!=s;i++)
+                    {
+                        device = speaker[i]
+                        if(device.hasCommand("initialize"))
+                        {
+                            log.debug "Initializing $device (speaker)"
+                            device.initialize()
+                            log.debug "wainting for 1 second"
+                            pauseExecution(1000)
+                        }
+                    }
+                }
+                speaker.playTextAndRestore(message, volumeLevel.toInteger())
+            }
+            if(speech)
+            {
+                if(initializeDevices)
+                {
+                    int i = 0
+                    int s = speech.size()
+                    def device 
+                    for(s!=0;i!=s;i++)
+                    {
+                        device = speech[i]
+                        if(device.hasCommand("initialize"))
+                        {
+                            log.debug "Initializing $device (speech)"
+                            device.initialize()
+                            log.debug "wainting for 1 second"
+                            pauseExecution(1000)
+                        }
+                    }
+                }
+                speech.speak(message)    
+            }
+        }
+    }
+}
+def buildDebugString(deviceList){
+    def devices = ""
+    int i = 0 
+    int s = deviceList.size()
+    if(s != 0) { 
+
+        for(s!=0; i!=s; i++)
+        {
+            devices += "${deviceList[i]}, "   
+        }
+
+    }
+    return devices
+}
 def resetCmdForce(){
     log.warn "Resetting forceCommand counter"
     atomicState.forceAttempts = 0   
 }
 def setDimmer(int val){
-    atomicState.setpointSentByApp = true
-    dimmer.setLevel(val) // reverse definition 
-    descriptiontext "$dimmer set to $val BY THIS APP"
+
+    if(dimmer)
+    {
+        atomicState.setpointSentByApp = true
+        dimmer.setLevel(val) 
+        descriptiontext "$dimmer set to $val BY THIS APP"
+    }
 }
 def virtualThermostat(need){
     if(heater || heatpump || addLowTemp)
@@ -1347,10 +1436,8 @@ def virtualThermostat(need){
 }
 def windowsManagement(desired, bedSensorContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh){
 
-
     if(controlWindows && windows && !bedSensorContactClosed && !atomicState.override)
     {
-
         def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
         boolean tooHumid = humidity >= 90 ? true : humidity >= humThres 
         boolean contactCapable = windows.any{it -> it.hasCapability("ContactSensor")}//?.size() == windows.size() 
@@ -1415,6 +1502,8 @@ ${!needToOpen && needCool && outsideTemperature <= desired - 4 && enoughTimeBetw
         {
             needToOpen = outsideWithinRange && inside > criticalcold && inside < criticalhot  // in power saving mode open windows if within range and inside not too hot nor too cold
         }
+
+
 
         logging """<div style=\"width:102%;background-color:green;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
 **********************WINDOWS************************
@@ -1532,6 +1621,9 @@ needToClose = $needToClose
                     atomicState.lastClosingTimeStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
                     atomicState.widerOpeningDone = false // simple value reset
                     windows.off()
+                    if(exception) {
+                        if(windows.any{it.hasCapability("Switch Level")}){ windows.setLevel(100) }
+                    }
                     if(doorsManagement && doorContactsAreOpen && otherWindows?.currentValue("switch") == "on" && atomicState.otherWindowsOpenByApp)
                     {
                         atomicState.otherWindowsOpenByApp = false
@@ -1553,16 +1645,16 @@ needToClose = $needToClose
                 {
                     log.error "WINDOWS MANAGEMENT ERROR - fire the developper"
                 }
-
             }
-
-
         }
         else if(windows && !inWindowsModes){
             descriptiontext "outside of windows modes"
             if(someAreOpen && atomicState.openByApp) // && (inside > desired + 2 || inside < desired - 2 ))
             {
                 windows.off()
+                if(windows.any{it.hasCapability("Switch Level")}){ 
+                    windows.setLevel(50) 
+                }
                 atomicState.openByApp = false
                 atomicState.closedByApp = true
                 if(doorsManagement && doorContactsAreOpen && otherWindows?.currentValue("switch") == "on")
@@ -1591,12 +1683,24 @@ needToClose = $needToClose
 
 
 }
-def calcRemainTime(timeLimit, timeStamp){
+def getRemainTime(timeLimit, timeStamp){
+
     timeLimit = timeLimit.toInteger() * 60 * 60 * 1000
-    def minutes = (timeLimit - (now() - timeStamp))/1000/60
-    def hours = (timeLimit - (now() - timeStamp))/1000/60/60
-    def remain = minutes >= 60 ? hours : minutes
+    long totalDuration = now() - timeStamp
+    float minutes = (timeLimit - totalDuration)/1000/60 // remaining minutes
+    float hours = (timeLimit - totalDuration)/1000/60/60 // remaining hours
+    float remain = minutes >= 60 ? hours : minutes // decision hours/minutes
     def unit = minutes >= 60 ? "hours" : "minutes"
+
+    logging """
+timeLlimit = $timeLimit
+timeStamp = $timeStamp
+now() - timeStamp = ${(now() - timeStamp)/1000/60} minutes
+hours = $hours
+minutes = $minutes
+remain = $remain
+unit = $unit 
+"""
 
     return "${Math.round(remain)} $unit"
 }
@@ -1652,11 +1756,20 @@ def getNeed(desired, bedSensorContactClosed, inside){
     def need = []
     def amplThreshold = 2
     def amplitude = Math.abs(inside - desired)
-    def swing = 0.5
+    def swing = outsideTemperature < 50 || outsideTemperature > 75 ? 0.5 : 1 // lower swing when hot or cold outside
     def coolswing = insideHum < 60 ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
 
-    boolean needCool = !bedSensorContactClosed ? (inWindowsModes ? ((outsideTemperature >= outsideThres /* makes ac run during winter... || amplitudeTooHigh*/) && inside >= coolswing) : outsideTemperature >= outsideThres && inside >= desired + swing) : inside >= desired + swing
+    boolean needCool = !bedSensorContactClosed ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= desired + swing) : outsideTemperature >= outsideThres + 5 && inside >= desired + swing
+
+    logging"""
+outsideTemperature >= outsideThres + 5 = ${outsideTemperature >= outsideThres + 5}
+outsideTemperature = $outsideTemperature
+outsideThres + 5 = ${outsideThres + 5}
+needCool = $needCool
+bedSensorContactClosed = $bedSensorContactClosed
+
+"""
     boolean needHeat = !bedSensorContactClosed ? (outsideTemperature < outsideThres /* makes heat run during summer... || amplitudeTooHigh*/) && inside <= desired - swing : inside <= desired - swing && outsideTemperature < outsideThres
 
     //log.warn "inside = $inside inside >= desired + swing : ${inside >= desired + swing} |||needCool=$needCool"
@@ -1664,7 +1777,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
     boolean motionActive = Active() || bedSensorContactClosed
 
     // shoulder season management: bedsensor forces ac to run despite cold outside if it gets too hot inside
-    boolean norHeatNorCool = !needCool && !needHeat && inside > desired && bedSensorContactClosed ? true : false
+    boolean norHeatNorCool = !needCool && !needHeat && inside > desired + swing && bedSensorContactClosed && outsideTemperature >= 55 ? true : false
     // the other room could be in an inadequate mode, which would be noticed by an undesirable temperature amplitude
     boolean unacceptable = doorContactsAreOpen && !atomicState.override && (inside < desired - 2 || inside > desired + 2) // if it gets too cold or too hot, ignore doorsManagement
     logging """inside = $inside 
@@ -2137,23 +2250,30 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
         }
     }
 
-    if(bedSensorTimeLimit != null) // if user selected time limit
+    if(bedSensorTimeLimit != null) // if user set a time limit
     {
-        boolean noCancellingEvent = atomicState.buttonPushed == true // only push button can cancel timer; check that this hasn't happened
-        // forward declaration would generate false positive of atomicState.lastTimeBsTrue, so test that it has been initialized first // 
-        if(atomicState.lastTimeBsTrue != null && noCancellingEvent) 
+        // forward declaration in updated() would generate false positive of atomicState.lastTimeBsTrue, 
+        // so we need to test that it has been initialized first by an actual event
+        if(atomicState.lastTimeBsTrue != null && atomicState.buttonPushed) 
         {
-            def message = "SIMPLE MODE - remaining time: ${calcRemainTime(bedSensorTimeLimit, atomicState.lastTimeBsTrue)}"
+            def remainTime = getRemainTime(bedSensorTimeLimit, atomicState.lastTimeBsTrue)
+            def message = "SIMPLE MODE - remaining time: ${remainTime}"
             descriptiontext formatText(message, "white", "grey")
-            if(now() - atomicState.lastTimeBsTrue > bedSensorTimeLimit * 1000 * 60 * 60)
+            if(remainTime <= 0) // time is up
             {
-                return true // return true as long as time limit hasn't been reached and atomicState.buttonPushed = true
+                result = false 
             }
+            else if(result || atomicState.buttonPushed) // time isn't up and either contact still returns true or button still pushed
+            {
+                result = true // return true as long as time limit hasn't been reached and atomicState.buttonPushed = true
+            }               
         }
     }
 
-    logging "bed sensor boolean returns $result"
+    logging"bed sensor boolean returns $result"
+
     atomicState.lastTimeBsTrue = result ? now() : atomicState.lastTimeBsTrue
+
     return result
 }
 boolean doorsContactsAreOpen(){
@@ -2241,6 +2361,8 @@ def Poll(){
     boolean override = atomicState.override    
     boolean heaterPoll = heater?.hasCommand("poll")
     boolean heaterRefresh = heater?.hasCommand("refresh") 
+    boolean pwPoll = pw?.hasCommand("poll")
+    boolean pwRefresh = pw?.hasCommand("refresh") 
 
     if(thermRefresh){
         thermostat.refresh()
@@ -2293,8 +2415,6 @@ def Poll(){
             }
         }
     }
-    boolean pwPoll = pw?.hasCommand("poll")
-    boolean pwRefresh = pw?.hasCommand("refresh") 
 
     if(pwRefresh){
         pw.refresh()

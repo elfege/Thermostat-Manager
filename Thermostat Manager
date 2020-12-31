@@ -1761,9 +1761,6 @@ def getDesired(bedsensorclosed){
         }
         else if(setSpecialTemp || specialSubstraction)
         {       
-                log.warn"""
-desired = $desired
-substract = $substract"""
             desired = specialSubstraction ? desired.toInteger() - substract.toInteger() : specialTemp
         
             descriptiontext "desired temperature ${substract ? "(specialSubstraction)":"(specialTemp)"} is: $desired and last recorded temperature is ${inside}"
@@ -1934,7 +1931,7 @@ inside > criticalcold :  ${inside > criticalcold}
 
     windowsManagement(desired, bedSensorContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh)
 
-    log.warn"""
+    logging"""
 bedSensorContactClosed = $bedSensorContactClosed
 doorContactsAreOpen = $doorContactsAreOpen
 !overrideSimpleMode = ${!overrideSimpleMode}

@@ -281,10 +281,17 @@ def contactsensors(){
                 paragraph formatText(message, "white", "grey")
                 def bedDevice = bedSensorType == "contact" ? bedSensorContact : bedSensorButton
                 input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${bedSensorType == "contact" ? "closed" : "pushed"}", submitOnChange:true, defaultValue:false
-
+                input "specialSubstraction", "bool", title: "Lower the current set point instead?", submitOnChange:true
+                
                 if(setSpecialTemp)
                 {
+                    app.updateSetting("specialSubstraction",[value:false,type:"bool"]) // foolproofing
                     input "specialTemp", "number", title: "Set the desired temperature", required: true
+                }
+                if(specialSubstraction)
+                {
+                    app.updateSetting("setSpecialTemp",[value:false,type:"bool"]) // foolproofing
+                    input "substract", "number", title: "Substract this value to the current set point", required:true 
                 }
             }
             input "doorsManagement", "bool", title: "When some doors are open, synchronise $thermostat with a thermostat from another room", defaultValue:false, submitOnChange:true
@@ -485,8 +492,9 @@ def initialize(){
         atomicState.lastMotionEvent = now() as long
         atomicState.lastNotification = now() as long
         atomicState.motionEvents = 0
+    atomicState.lastTimeBsTrue = now() as long
 
-    logging("subscribing to events...")
+        logging("subscribing to events...")
 
     //subscribe(location, "mode", ChangedModeHandler) 
     subscribe(thermostat, "temperature", temperatureHandler)
@@ -584,18 +592,13 @@ def modeChangeHandler(evt){
     //atomicState.closedByApp = true  
     //}
 
-    if(evt.value in restricted)
-    {
-        atomicState.paused = true   
-        atomicState.restricted = true
-    }
-    else if(atomicState.paused == true && atomicState.restricted == true)
-    {
-        updated() // will reset atomicState.restricted to false
-    }
     mainloop()
 }
 def appButtonHandler(btn) {
+    if(location.mode in restricted){
+        descriptiontext "location in restricted mode, doing nothing"
+        return
+    } 
     switch(btn) {
         case "pause":atomicState.paused = !atomicState.paused
         logging("atomicState.paused = $atomicState.paused")
@@ -626,27 +629,43 @@ def appButtonHandler(btn) {
     }
 }
 def contactHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         log.info "$evt.device is $evt.value"
         atomicState.lastOpenEvt = now() 
         mainloop()
     }
 }
 def motionHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         descriptiontext "$evt.device is $evt.value"
         mainloop()
     }
 
 }
 def temperatureHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         logging("$evt.device returns ${evt.value}F")
         mainloop()
     }
 }
 def bedSensorContactHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         log.info "$evt.device is $evt.value"
 
         atomicState.lastBSeventStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
@@ -662,7 +681,11 @@ def bedSensorContactHandler(evt){
     }
 }
 def holdableButtonHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         log.debug "BUTTON EVT $evt.device $evt.name $evt.value"
 
         if(evt.name in ["pushed", "held"])
@@ -683,7 +706,11 @@ def holdableButtonHandler(evt){
     }
 }
 def doubleTapableButtonHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         log.debug "BUTTON EVT $evt.device $evt.name $evt.value"
 
         if(evt.name == "doubleTapped")
@@ -700,6 +727,10 @@ def doubleTapableButtonHandler(evt){
 }
 def thermostatModeHandler(evt){
 
+    if(location.mode in restricted){
+        descriptiontext "location in restricted mode, doing nothing"
+        return
+    } 
     log.debug "--------- $evt.device set to $evt.value"
 
     if(evt.value == "auto" && autoOverride)
@@ -752,7 +783,11 @@ thermostatB: $thermostatB
     }
 }
 def setPointHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         logging """$evt.device $evt.name $evt.value
 sync ? $sync
 thermostatB: $thermostatB
@@ -871,7 +906,11 @@ evt.value = $evt.value
 }
 def dimmerHandler(evt){
 
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         descriptiontext "new dimmer level is $evt.value"
         if(method == "auto" && !atomicState.setpointSentByApp)
         {
@@ -959,13 +998,21 @@ new setpoint = $evtVal
     }
 }
 def outsideThresDimmerHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         descriptiontext "*********** Outside threshold value is now: $evt.value ***********"
         //mainloop()
     }
 }
 def windowsHandler(evt){
-    if(!atomicState.restricted && !atomicState.paused){
+    if(!atomicState.paused){
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        } 
         log.debug "$evt.device is $evt.value"
         boolean doorContactsAreOpen = doorsContactsAreOpen()
 
@@ -1003,8 +1050,14 @@ otherWindows?.off()
 /************************************************MAIN functions*************************************************/
 def mainloop(){
 
-    if(!atomicState.paused && !atomicState.restricted)
+    if(!atomicState.paused)
     {
+
+        if(location.mode in restricted){
+            descriptiontext "location in restricted mode, doing nothing"
+            return
+        }    
+
         boolean bedsensorclosed = bedSensorIsClosed()
         boolean motionActive = Active() || bedSensorContactClosed
         boolean contactClosed = !contactsAreOpen()
@@ -1683,51 +1736,14 @@ needToClose = $needToClose
 
 
 }
-def getRemainTime(timeLimit, timeStamp){
 
-    timeLimit = timeLimit.toInteger() * 60 * 60 * 1000
-    long totalDuration = now() - timeStamp
-    float minutes = (timeLimit - totalDuration)/1000/60 // remaining minutes
-    float hours = (timeLimit - totalDuration)/1000/60/60 // remaining hours
-    float remain = minutes >= 60 ? hours : minutes // decision hours/minutes
-    def unit = minutes >= 60 ? "hours" : "minutes"
-
-    logging """
-timeLlimit = $timeLimit
-timeStamp = $timeStamp
-now() - timeStamp = ${(now() - timeStamp)/1000/60} minutes
-hours = $hours
-minutes = $minutes
-remain = $remain
-unit = $unit 
-"""
-
-    return "${Math.round(remain)} $unit"
-}
 
 /************************************************DECISIONS******************************************************/
 def getDesired(bedsensorclosed){
     int desired = 70 // default value
     def inside = getInsideTemp()
 
-    if(bedsensorclosed)
-    {
-        if(doorsContactsAreOpen() && overrideSimpleMode)
-        {
-            descriptiontext "some doors are open: bed sensor mode ignored at user's request"
-        }
-        else if(setSpecialTemp)
-        {            
-            desired = specialTemp
-            descriptiontext "desired temperature is: $desired and last recorded temperature is ${inside}"
-            return desired // END due to bed sensor mode
-        }
-        else
-        {
-            descriptiontext "desired temperature is: $desired and last recorded temperature is ${inside}"
-            return desired // return the default value
-        }
-    } 
+ 
 
     if(method == "auto")
     {
@@ -1737,6 +1753,28 @@ def getDesired(bedsensorclosed){
     {
         desired = dimmer?.currentValue("level")
     }
+       if(bedsensorclosed)
+    {
+        if(doorsContactsAreOpen() && overrideSimpleMode)
+        {
+            descriptiontext "some doors are open: bed sensor mode ignored at user's request"
+        }
+        else if(setSpecialTemp || specialSubstraction)
+        {       
+                log.warn"""
+desired = $desired
+substract = $substract"""
+            desired = specialSubstraction ? desired.toInteger() - substract.toInteger() : specialTemp
+        
+            descriptiontext "desired temperature ${substract ? "(specialSubstraction)":"(specialTemp)"} is: $desired and last recorded temperature is ${inside}"
+            return desired // END due to bed sensor mode
+        }
+        else
+        {
+            descriptiontext "desired temperature is: $desired and last recorded temperature is ${inside}"
+            return desired // return the default value
+        }
+    } 
     descriptiontext "desired temperature is: $desired and current temperature is ${inside}"
     return desired
 }
@@ -1896,8 +1934,14 @@ inside > criticalcold :  ${inside > criticalcold}
 
     windowsManagement(desired, bedSensorContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh)
 
+    log.warn"""
+bedSensorContactClosed = $bedSensorContactClosed
+doorContactsAreOpen = $doorContactsAreOpen
+!overrideSimpleMode = ${!overrideSimpleMode}
+bedSensorIsClosed() = ${bedSensorIsClosed()}
+"""
 
-    if((bedSensorContactClosed && !doorContactsAreOpen) || (doorContactsAreOpen && !overrideSimpleMode && bedSensorContactClosed))
+    if((bedSensorContactClosed && !doorContactsAreOpen) || (!doorContactsAreOpen && !overrideSimpleMode && bedSensorContactClosed))
     {
         log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Enabled</div>"
     }
@@ -2145,6 +2189,36 @@ def getLastMotionEvents(Dtime, testType){
     descriptiontext "$events active events in the last ${noMotionTime} minutes ($testType)"
     return events
 }
+def getRemainTime(timeLimit, timeStamp){
+
+    timeLimit = timeLimit.toInteger() * 60 * 60 * 1000
+    long elapsedTime = now() - timeStamp // total elapsed time since last true event and now
+
+    if(elapsedTime > timeLimit)
+    {
+        return 0
+    }
+    
+    // get the remaining time given the time limit
+    float minutes = (timeLimit - elapsedTime)/1000/60 // remaining minutes
+    float hours = (timeLimit - elapsedTime)/1000/60/60 // remaining hours
+    float remain = minutes >= 60 ? hours : minutes // decision hours/minutes
+    def unit = minutes >= 60 ? "hours" : "minutes"
+
+    logging """
+timeLlimit = $timeLimit
+timeStamp = $timeStamp
+(now() - timeStamp)/1000/60 = ${(now() - timeStamp)/1000/60} minutes
+elapsedTime = $elapsedTime
+//REMAINING TIME in minutes, hours
+minutes = $minutes
+hours = $hours
+remain = $remain
+unit = $unit 
+"""
+
+    return "${Math.round(remain)} $unit"
+}
 /************************************************BOOLEANS******************************************************/
 boolean contactsAreOpen(){
     boolean Open = false
@@ -2176,7 +2250,7 @@ boolean contactsAreOpen(){
     return Open
 }
 boolean bedSensorIsClosed(){
-    boolean result = false
+    boolean result =  atomicState.lastResultWasTrue 
     //boolean doorOpen = doorsContactsAreOpen() // FEEDBACK LOOP since doorsContactsAreOpen() function calls bedSensorIsClosed()
     boolean currentlyClosed = false 
 
@@ -2211,13 +2285,19 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
                 {
                     descriptiontext "atomicState.buttonPushed = $atomicState.buttonPushed"
                     result = true
+                    atomicState.lastResultWasTrue = true
                 }
                 else 
                 {
                     descriptiontext "atomicState.buttonPushed = $atomicState.buttonPushed"
                     result = false
+                    atomicState.lastResultWasTrue = false
                 }
-                if(atomicState.ButtonSupercedes) return result
+                if(atomicState.ButtonSupercedes) 
+                {
+                    atomicState.lastResultWasTrue = atomicState.lastResultWasTrue ? true : false
+                    return result
+                }
             }
 
             if(currentlyClosed && atomicState.buttonPushed) { // if contact is closed AND button pushed, return true
@@ -2234,7 +2314,7 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
                 result = events > 0
                 logging("$bedSensorContact closed ?: $result")
             }
-
+            atomicState.lastResultWasTrue = atomicState.lastResultWasTrue ? true : false
         }
         else if(bedSensorType == "button")
         {
@@ -2242,15 +2322,17 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
             if(atomicState.buttonPushed)
             {
                 result = true
+                atomicState.lastResultWasTrue = true
             }
             else 
             {
                 result = false
+                atomicState.lastResultWasTrue = false
             }
         }
     }
 
-    if(bedSensorTimeLimit != null) // if user set a time limit
+  if(bedSensorTimeLimit != null) // if user set a time limit
     {
         // forward declaration in updated() would generate false positive of atomicState.lastTimeBsTrue, 
         // so we need to test that it has been initialized first by an actual event
@@ -2262,17 +2344,23 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
             if(remainTime <= 0) // time is up
             {
                 result = false 
+                atomicState.lastResultWasTrue = false
             }
             else if(result || atomicState.buttonPushed) // time isn't up and either contact still returns true or button still pushed
             {
                 result = true // return true as long as time limit hasn't been reached and atomicState.buttonPushed = true
+                atomicState.lastResultWasTrue = true
             }               
         }
     }
 
-    logging"bed sensor boolean returns $result"
+    logging"bed sensor boolean returns $result"   
 
-    atomicState.lastTimeBsTrue = result ? now() : atomicState.lastTimeBsTrue
+    if(!atomicState.lastResultWasTrue && result == true)
+    {
+        // time stamp this new value
+        atomicState.lastTimeBsTrue = now()
+    }
 
     return result
 }
@@ -2353,7 +2441,10 @@ def stop(){
 
 }
 def Poll(){
-
+    if(location.mode in restricted){
+        descriptiontext "location in restricted mode, doing nothing"
+        return
+    } 
     boolean thermPoll = thermostat.hasCommand("poll")
     boolean thermRefresh = thermostat.hasCommand("refresh") 
     boolean outsidePoll = outsideTemp.hasCommand("poll")

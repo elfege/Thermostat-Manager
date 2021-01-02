@@ -70,14 +70,14 @@ def settings() {
             input "enabledebug", "bool", title: "Debug", submitOnChange:true
             if(enabledebug)
             {
-                log.warn "debug enabled"      
+                logging "debug enabled"      
                 atomicState.EnableDebugTime = now()
                 runIn(1800,disablelogging)
                 descriptiontext "debug will be disabled in 30 minutes"
             }
             else 
             {
-                log.warn "debug disabled"
+                logging "debug disabled"
             }
             input "description", "bool", title: "Description Text", submitOnChange:true
 
@@ -108,7 +108,10 @@ def thermostats(){
         section("Sensors")
         {
             input "outsideTemp", "capability.temperatureMeasurement", title: "Required: select a weather sensor for outside temperature", required:true, submitOnChange:true
-            if(thermostat != null && thermostat.hasCapability("RelativeHumidityMeasurement"))
+            // verify not only capability but actual reading, some thermostats working with generic drivers
+            // will return true to some capabilities while the hardware won't parse any value
+            boolean hasHumidity = thermostat != null && thermostat.hasCapability("RelativeHumidityMeasurement") && thermostat.currentValue("humidity") != null
+            if(hasHumidity)
             {
                 paragraph formatText("""Your thermostat doesn't support humidity measurement, please select a separate humidity sensor so as to make sure 
 that this app gives its best at keeping you comfortable!""", "white", "blue")
@@ -190,7 +193,7 @@ def methods(){
                 {
                     log.debug "refTemp = $refTemp desiredVar = $desiredVar"
                     paragraph """ 
-In cooling mode, when outside temperature is ${refTemp}F your room will be cooled to ${refTemp - desiredVar}F. Now, based on these reference values, a linear function will apply hereafter (meaning this variation will change proportionally to how hot it gets outside)
+In cooling mode, when outside temperature is ${refTemp}F your room will be cooled to ${refTemp.toInteger() - desiredVar.toInteger()}F. Now, based on these reference values, a linear function will apply hereafter (meaning this variation will change proportionally to how hot it gets outside)
 In heating mode, the function will work with a different method to make sure to keep you warm """
                 }
                 input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue: 75
@@ -446,12 +449,12 @@ def pageNameUpdate(){
     if(atomicState.paused == true)
     {
         atomicState.button_name = "resume"
-        log.debug "button name is: $atomicState.button_name"
+        logging "button name is: $atomicState.button_name"
     }
     else 
     {
         atomicState.button_name = "pause"
-        log.debug "button name is: $atomicState.button_name"
+        logging "button name is: $atomicState.button_name"
     }
 }
 
@@ -804,9 +807,8 @@ def setPointHandler(evt){
 sync ? $sync
 thermostatB: $thermostatB
 
-"""
-        atomicState.lastSetPoint = atomicState.lastSetPoint != null ? atomicState.lastSetPoint : evt.value.toInteger()
-
+"""    
+           
         if(sync && thermostatB)
         {
             def cmd = "set${evt.name.capitalize()}"
@@ -827,7 +829,6 @@ any found with same current value: ${thermostatB?.any{it -> it.currentValue(evt.
 
 
 """
-
             if("$evt.device" == "$thermostat")
             {
                 //log.warn "case ASP"
@@ -846,20 +847,18 @@ any found with same current value: ${thermostatB?.any{it -> it.currentValue(evt.
             }
             //return // must not set atomicState.setpointSentByApp back to false in this case
         }
+
         if(!atomicState.setpointSentByApp)
         {
-            descriptiontext "new $evt.name is $evt.value---------------------------------------"
+            descriptiontext "new $evt.name is $evt.value -------------------------------------"
 
             if(method == "auto" && !atomicState.setpointSentByApp)
             {
                 log.debug "Updating automatic settings based on new thermostat set point input $evt.value"
-
-
-
-                updateValues(evt.value.toInteger())
-
-
+                //updateValues(evt.value.toInteger())
+                updateValues(evt.value)
             }
+
 
             def currDim = dimmer?.currentValue("level")
             def thermMode = thermostat?.currentValue("thermostatMode")
@@ -895,7 +894,8 @@ evt.value = $evt.value
                 {
                     //runIn(3, setDimmer, [data:evt.value.toInteger()]) 
                     log.debug "SETTING $dimmer to $evt.value"
-                    setDimmer(evt.value.toInteger())
+
+                    setDimmer(evt.value) 
                 }
             }
             if(!correspondingMode)
@@ -912,9 +912,11 @@ evt.value = $evt.value
             log.warn "event generated by this app, doing nothing"
         }
         atomicState.setpointSentByApp = false // always reset this static/class variable after calling it
-        atomicState.lastSetPoint = evt.value.toInteger()
         //mainloop() // prevent feedback loops so both dimmer and thermosta set points can be modified. Changes will be made on next scheduled loop or motion events
+        atomicState.lastSetPoint = evt.value
     }
+
+
 }
 def dimmerHandler(evt){
 
@@ -928,13 +930,14 @@ def dimmerHandler(evt){
         {
             log.debug "Updating automatic settings based on new dimmer level"
 
-            def outside = outsideTemp.currentValue("temperature").toInteger()
+            def outside = outsideTemp.currentValue("temperature")
             def outsideThreshold = getOutsideThershold()
             def needSituation = outside < outsideThreshold ? "heat" : "cool"
             def newRefTemp = outside
 
 
-            updateValues(evt.value.toInteger())
+
+            updateValues(evt.value)
 
         }
         else if(!atomicState.setpointSentByApp)
@@ -952,30 +955,49 @@ def dimmerHandler(evt){
     }
 }
 def updateValues(evtVal){
-    def outside = outsideTemp.currentValue("temperature").toInteger()
+
+    evtVal = Double.parseDouble(evtVal)
+    def lastSetpoint = atomicState.lastSetPoint.toDouble()
+    
+    log.warn """
+evtVal instanceof Double ? ${evtVal instanceof Double}
+tempConvertVal instanceof Double ? ${tempConvertVal instanceof Double}
+tempConvertVal instanceof String ? ${tempConvertVal instanceof String}
+"""
+    
+    def outside = outsideTemp.currentValue("temperature")
     def outsideThreshold = getOutsideThershold()
     def needSituation = outside < outsideThreshold ? "heat" : "cool"
     def newRefTemp = outside
-    def newDesiredVar = Math.abs(evtVal - outside)
+    def newDesiredVar = Math.abs(evtVal - outside).toInteger()
+    log.warn """
+newDesiredVar = $newDesiredVar
+"""
     app.updateSetting("desiredVar",[value:newDesiredVar,type:"number"]) // update this setting
     app.updateSetting("refTemp",[value:newRefTemp,type:"number"]) // we also need to update the new reference temperature in order to modify the linear equation 
     log.info """
 newDesiredVar = $newDesiredVar
 outside = $outside
 needSituation = $needSituation
-atomicState.lastSetPoint = $atomicState.lastSetPoint
+lastSetpoint = $lastSetpoint
 new setpoint = $evtVal
 """          
+
     // calculate an absolute value of the difference between old and new value
-    def absDifference = Math.abs(atomicState.lastSetPoint - evtVal)
+    def absDifference = Math.abs(lastSetpoint - evtVal)
     // update min and max auto cool values
     if(needSituation == "cool")
     {        
-        def val = null
-        //  if(evtVal < atomicState.lastSetPoint)  // if need cooler room, lower min
-        //  {
-        val = minAutoCool - absDifference
-        log.debug "New val to add or substract to current thresholds = $absDifference"
+        int val = 0
+
+        logging """
+maxAutoCool = $maxAutoCool instanceof String ? ${maxAutoCool instanceof String}
+absDifference = $absDifference instanceof String ? ${absDifference instanceof String}
+val = $val instanceof String ? ${val instanceof String}
+
+"""
+
+        val = maxAutoCool.toInteger() - absDifference.toInteger()    
         val = val < 70 ? 70 : val // don't go too low
         // so we lower this setting's value a bit
         app.updateSetting("minAutoCool",[value:val,type:"number"])
@@ -990,23 +1012,28 @@ new setpoint = $evtVal
     }
     // update min and max auto heat values
     if(needSituation == "heat")
-    {
-        def val = null
-        //    if(evtVal < atomicState.lastSetPoint)  // if need cooler room, lower min
-        //   {
-        val = minAutoHeat - absDifference
+    {       
+        int val = 0
+
+        logging """
+minAutoHeat = $minAutoHeat instanceof String ? ${minAutoHeat instanceof String}
+absDifference = $absDifference instanceof String ? ${absDifference instanceof String}
+val = $val instanceof String ? ${val instanceof String}
+
+"""
+
+        val = minAutoHeat.toInteger() - absDifference.toInteger()    
+
+        log.debug "minAutoHeat = $minAutoHeat instanceof String ? ${minAutoHeat instanceof String}"
+
         val = val < 68 ? 68 : val // don't go too low
-        // so we lower this setting's value a bit
-        app.updateSetting("minAutoHeat",[value:val,type:"number"])
+        // so we lower this setting's value a bit        
+        app.updateSetting("minAutoHeat",[value:val,type:"number"])     
         log.debug "minAutoHeat is now $minAutoHeat"
-        //  }
-        //  else { // if need warmer room, raise max
         val = maxAutoHeat + absDifference
         val = val > 80 ? 80 : val // don't go too high
         app.updateSetting("maxAutoHeat",[value:val,type:"number"])
         log.debug "maxAutoHeat is now $maxAutoHeat"
-        // }
-
     }
 }
 def outsideThresDimmerHandler(evt){
@@ -1074,25 +1101,31 @@ def mainloop(){
         boolean motionActive = Active() || bedSensorContactClosed
         boolean contactClosed = !contactsAreOpen()
         boolean doorContactsAreOpen = doorsContactsAreOpen()
+
         int desired = getDesired(bedsensorclosed)
+
+
+
         def inside = getInsideTemp()
-        def outside = outsideTemp.currentValue("temperature").toInteger()
+        def outside = outsideTemp.currentValue("temperature")
         descriptiontext "outside temperature is $outside"
         def needData = getNeed(desired, bedsensorclosed, inside)
         def need = needData[1]
 
-        def currSP = thermostat?.currentValue("thermostatSetpoint").toInteger()
+        def currSP = thermostat?.currentValue("thermostatSetpoint")
         //log.warn "--- $currSP"
         def thermMode = thermostat?.currentValue("thermostatMode")
         logging("need is needData[1] = $need")
         def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
+
+
 
         if(atomicState.antifreeze)
         {
             log.warn "ANTI FREEZE HAS BEEN TRIGGERED"
         }
         // antifreeze precaution (runs after calling atomicState.antifreeze on purpose here)
-        def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature").toInteger() : inside
+        def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature"): inside
         if(antifreeze){
             def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : 67
 
@@ -1285,7 +1318,7 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
                 logging("Thermostat already set to $need mode")
             }
 
-            if(need != "off" && currSP.toInteger() != desired && !thermTempDiscrepancy)
+            if(need != "off" && currSP != desired && !thermTempDiscrepancy)
             {
                 atomicState.setpointSentByApp = true
                 thermostat."${cmd}"(desired)   // set desired temp
@@ -1442,12 +1475,13 @@ def resetCmdForce(){
     log.warn "Resetting forceCommand counter"
     atomicState.forceAttempts = 0   
 }
-def setDimmer(int val){
+def setDimmer(val){
 
     if(dimmer)
     {
         atomicState.setpointSentByApp = true
-        dimmer.setLevel(val) 
+        dimmer.setLevel(Math.round(Double.parseDouble(val))) // some thermostats will parse set points as double, 
+        //so it needs to be rounded so as to be parsed as a string in the dimmer driver        
         descriptiontext "$dimmer set to $val BY THIS APP"
     }
 }
@@ -1456,7 +1490,7 @@ def virtualThermostat(need){
     {
         def outsideTemperature = outsideTemp?.currentValue("temperature") // only needed if electric heater here
         def lowTemperature = lowtemp ? lowtemp : 40
-        boolean heaterAsAdditional = addLowTemp && outsideTemperature < lowTemperature.toInteger()
+        boolean heaterAsAdditional = addLowTemp && outsideTemperature < lowTemperature
         logging("heaterAsAdditional = $heaterAsAdditional")
         if(need == "heat" || (need == "heat" && heaterAsAdditional))
         {
@@ -1755,8 +1789,6 @@ def getDesired(bedsensorclosed){
     int desired = 70 // default value
     def inside = getInsideTemp()
 
-
-
     if(method == "auto")
     {
         desired = getAutoVal()
@@ -1773,7 +1805,7 @@ def getDesired(bedsensorclosed){
         }
         else if(setSpecialTemp || specialSubstraction)
         {       
-            desired = specialSubstraction ? desired.toInteger() - substract.toInteger() : specialTemp
+            desired = specialSubstraction ? desired - substract : specialTemp
 
             descriptiontext "desired temperature ${substract ? "(specialSubstraction)":"(specialTemp)"} is: $desired and last recorded temperature is ${inside}"
             return desired // END due to bed sensor mode
@@ -1827,7 +1859,7 @@ def getNeed(desired, bedSensorContactClosed, inside){
     boolean contactClosed = !contactsAreOpen()  
     boolean doorContactsAreOpen = doorsContactsAreOpen()
     def outsideThres = getOutsideThershold()
-    def outsideTemperature = outsideTemp.currentValue("temperature").toInteger()
+    def outsideTemperature = outsideTemp.currentValue("temperature")
     def need0 = ""
     def need1 = ""
     def need = []
@@ -1995,7 +2027,7 @@ bedSensorIsClosed() = ${bedSensorIsClosed()}
 
     need = [need0, need1]
 
-    log.trace "current need: ${need1 != "off" ? "${need1}ing" : need1}"
+    descriptiontext "current need: ${need1 != "off" ? "${need1}ing" : need1}"
 
     logging"""<div style=\"width:102%;background-color:#1C2BB7;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
 --------------NEED---------------------
@@ -2039,18 +2071,21 @@ final NEED value = $need
 }
 def getAutoVal(){
 
+    def outside = outsideTemp?.currentValue("temperature") 
     def need = outside >= getOutsideThershold() ? "cool" : "heat"
-    def result = 73 // just a temporary default value
-    def outside = outsideTemp?.currentValue("temperature")    
+    def result = 73 // just a temporary default value   
     //def humidity = outsideTemp?.currentValue("humidity") // outside humidity
     def humidity = getInsideHumidity() // in auto mode we evaluate based only on inside humidity
     humidity = humidity != null ? humidity : 50 // assume 50 as a temporary value to prevent errors when a has just been installed by user and humidity value has yet to be parsed
+
     def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
 
     def variation = getVariationAmplitude(outside, need)
-    log.debug "variation amplitude = $variation | need (auto, not from getNeed()) is $need "
+
+    descriptiontext "variation amplitude = $variation | absolute need (auto method, not from getNeed()) is $need "
 
     result = need == "cool" ? humidity >= humThres ? outside - variation + 1 : outside - variation : need == "heat" ? humidity >= humThres ? outside + variation + 1 : outside + variation : "ERROR"
+
 
     if(result == "ERROR") { 
         log.error """ERROR at getAutoVal()
@@ -2088,22 +2123,28 @@ def getVariationAmplitude(outside, need){
 
     //https://www.desmos.com/calculator/uc9391tw1f
 
-    //def max = 10 // max variation // deprecated: need more than 10 when heating... 
-    //log.warn "desiredVar = $desiredVar"
-
-    def y = null // value to find
+    def y = 0 // value to find
     def x = outside // current temperature outside
     def ya = desiredVar != null ? desiredVar : 1 // coressponding difference required when outside temperature = xa
+    ya = ya.toFloat()
     def xa = refTemp != null ? refTemp : 77 // 
     def slope = 0.8
     def m = need == "cool" ? slope : (slope + 0.1)*-1  // slope 
     //def a = -1 // offset
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
+    logging """
+y = $y
+outside = $outside
+outside instance of String ? ${outside instanceof String}
+ya instance of String ? ${ya instanceof String}
+slope instance of String ? ${slope instanceof String}
+y instanceof String ? ${y instanceof String}
+"""
     //y = y < max ? y : max // deprecated
     y = y < 1 ? 1 : y
 
-    log.trace "linear result for amplitude variation for auto temp = ${y.toInteger()}"
+    logging "linear result for amplitude variation for auto temp = ${y.toInteger()}"
     return y.toInteger()
 
 }
@@ -2135,7 +2176,7 @@ def getInsideTemp(){
         for(s != 0; i<s;i++)
         {
             def val = sensor[i]?.currentValue("temperature")
-            descriptiontext "--${sensor[i]} temperature is: $val"
+            logging "--${sensor[i]} temperature is: $val"
             sum += val
         }
 
@@ -2276,7 +2317,7 @@ boolean contactsAreOpen(){
         }
         else 
         {
-            log.trace messageText
+            logging messageText
         }
         Open = listOpen.size() > 0 && now() - atomicState.lastOpenEvt > deltaTime * 1000
     }
@@ -2357,7 +2398,7 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
         }
         else if(bedSensorType == "button")
         {
-            descriptiontext "-- atomicState.buttonPushed = $atomicState.buttonPushed"
+            logging "-- atomicState.buttonPushed = $atomicState.buttonPushed"
             if(atomicState.buttonPushed)
             {
                 result = true
@@ -2400,7 +2441,7 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
     }
 
     logging"bed sensor boolean returns $result"   
-    log.warn "atomicState.lastResultWasTrue = $atomicState.lastResultWasTrue"
+    //log.warn "atomicState.lastResultWasTrue = $atomicState.lastResultWasTrue"
 
     if(newEvent && result == true)
     {
@@ -2495,7 +2536,7 @@ def Poll(){
     {
         return
     }
-    
+
     boolean override = atomicState.override   
     boolean thermPoll = thermostat.hasCommand("poll")
     boolean thermRefresh = thermostat.hasCommand("refresh") 

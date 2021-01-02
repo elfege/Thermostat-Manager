@@ -108,6 +108,12 @@ def thermostats(){
         section("Sensors")
         {
             input "outsideTemp", "capability.temperatureMeasurement", title: "Required: select a weather sensor for outside temperature", required:true, submitOnChange:true
+            if(thermostat != null && thermostat.hasCapability("RelativeHumidityMeasurement"))
+            {
+                paragraph formatText("""Your thermostat doesn't support humidity measurement, please select a separate humidity sensor so as to make sure 
+that this app gives its best at keeping you comfortable!""", "white", "blue")
+                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "Select a humidity sensor", required:false, submitOnChange:true
+            }
             input "sensor", "capability.temperatureMeasurement", title: "select a temperature sensor (optional)", submitOnChange:true, multiple:true
             if(sensor)
             {
@@ -282,7 +288,7 @@ def contactsensors(){
                 def bedDevice = bedSensorType == "contact" ? bedSensorContact : bedSensorButton
                 input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${bedSensorType == "contact" ? "closed" : "pushed"}", submitOnChange:true, defaultValue:false
                 input "specialSubstraction", "bool", title: "Lower the current set point instead?", submitOnChange:true
-                
+
                 if(setSpecialTemp)
                 {
                     app.updateSetting("specialSubstraction",[value:false,type:"bool"]) // foolproofing
@@ -702,7 +708,13 @@ def holdableButtonHandler(evt){
         {
             atomicState.buttonPushed = false
         }
+
+        atomicState.lastButtonEvent = now()
         mainloop()
+    }
+    else
+    {
+        log.warn "App is paused, button event was ignored"
     }
 }
 def doubleTapableButtonHandler(evt){
@@ -1448,14 +1460,14 @@ def virtualThermostat(need){
         logging("heaterAsAdditional = $heaterAsAdditional")
         if(need == "heat" || (need == "heat" && heaterAsAdditional))
         {
-            boolean powercap = heater.hasAttribute("power")
+            boolean powercap = heater?.hasAttribute("power")
             logging("is heater power meter capable? $powercap")
             boolean powerok = powercap ? (heater?.currentValue("power") > 100) : true
             logging "$heater power consumption is ${powerok ? "ok" : "not as expected"} ${powercap ? "${heater?.currentValue("power")}watts" : ''}"
             if(heater?.currentValue("switch") != "on" || !powerok)
             {
                 logging "Turning $heater on"
-                heater.on()   
+                heater?.on()   
             }
             else if(heater?.currentValue("switch") == "on")
             {
@@ -1467,7 +1479,7 @@ def virtualThermostat(need){
             if(heater?.currentValue("switch") != "off")
             {
                 logging("Turning $heater off")
-                heater.off()
+                heater?.off()
             }
             else 
             {
@@ -1479,11 +1491,11 @@ def virtualThermostat(need){
     {
         if(need == "cool"){
             logging "turning $cooler on"
-            cooler.on()
+            cooler?.on()
         }
         else {
             logging "turning $cooler off"
-            cooler.off()
+            cooler?.off()
         }
     }
 }
@@ -1743,7 +1755,7 @@ def getDesired(bedsensorclosed){
     int desired = 70 // default value
     def inside = getInsideTemp()
 
- 
+
 
     if(method == "auto")
     {
@@ -1753,7 +1765,7 @@ def getDesired(bedsensorclosed){
     {
         desired = dimmer?.currentValue("level")
     }
-       if(bedsensorclosed)
+    if(bedsensorclosed)
     {
         if(doorsContactsAreOpen() && overrideSimpleMode)
         {
@@ -1762,7 +1774,7 @@ def getDesired(bedsensorclosed){
         else if(setSpecialTemp || specialSubstraction)
         {       
             desired = specialSubstraction ? desired.toInteger() - substract.toInteger() : specialTemp
-        
+
             descriptiontext "desired temperature ${substract ? "(specialSubstraction)":"(specialTemp)"} is: $desired and last recorded temperature is ${inside}"
             return desired // END due to bed sensor mode
         }
@@ -1775,10 +1787,40 @@ def getDesired(bedsensorclosed){
     descriptiontext "desired temperature is: $desired and current temperature is ${inside}"
     return desired
 }
+def getInsideHumidity(){
+
+    def result 
+
+    if(!optionalHumSensor)
+    {
+        // if  we tested with hasCapability() it could return true due to generic thermostat drivers, so we test null value instead
+        result = thermostat?.currentValue("humidity") != null ? thermostat?.currentValue("humidity") : outsideTemp?.currentValue("humidity") 
+
+        if(result == null) // if still null, force the user to review their settings
+        {
+            log.error formatText("NOR YOUR THERMOSTAT NOR YOUR OUTSIDE SENSOR SUPPORT HUMIDITY MEASUREMENT - PICK A DIFFERENT SENSOR IN YOUR SETTINGS", "black", "red")
+        }
+    }
+    else
+    {
+        result = optionalHumSensor.currentValue("humidity")   
+        if(result == null) // if still null, force the user to review their settings
+        {
+            log.warn formatText("$optionalHumSensor does not support humidity (beware of generic drivers!). - PICK A DIFFERENT SENSOR IN YOUR SETTINGS", "black", "red")
+            result = thermostat?.currentValue("humidity") != null ? thermostat?.currentValue("humidity") : outsideTemp?.currentValue("humidity") 
+            if(result != null)
+            {
+                log.warn formatText("This app is using ${thermostat?.currentValue("humidity") != null ? "$thermostat" : "$outsideTemp"} as a default humidity sensor in the mean time", "black", "red")
+            }
+            result = result == null ? 50 : result // temporary value as last resort
+        }
+    }
+    descriptiontext "Inside humidity is ${result}%"
+}
 def getNeed(desired, bedSensorContactClosed, inside){
 
     def humidity = outsideTemp?.currentValue("humidity") 
-    def insideHum = thermostat?.currentValue("humidity") // backup for windows and value used for negative swing variation when cooling
+    def insideHum = getInsideHumidity() // backup for windows and value used for negative swing variation when cooling   
     humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50)
     boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !bedSensorContactClosed 
     boolean inWindowsModes = windows && location.mode in windowsModes
@@ -2001,7 +2043,7 @@ def getAutoVal(){
     def result = 73 // just a temporary default value
     def outside = outsideTemp?.currentValue("temperature")    
     //def humidity = outsideTemp?.currentValue("humidity") // outside humidity
-    def humidity = thermostat?.currentValue("humidity") // in auto mode we evaluate based only on inside humidity
+    def humidity = getInsideHumidity() // in auto mode we evaluate based only on inside humidity
     humidity = humidity != null ? humidity : 50 // assume 50 as a temporary value to prevent errors when a has just been installed by user and humidity value has yet to be parsed
     def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
 
@@ -2145,7 +2187,7 @@ If this message still shows within an hour, check your thermostat configuration.
     //log.warn "y = $y"
     def result = y > 68 ? 68 : (y < 60 ? 60 : y) // max and min
 
-    descriptiontext "cool/heat decision result = ${y != result ? "$result (coorected from y=$y)" : "$result"} (humidity being ${humidity < 40 ? "low" : "${humidity}%"})"
+    descriptiontext "cool/heat decision result = ${y != result ? "$result (corrected from y=$y)" : "$result"} (humidity being ${humidity < 40 ? "low at ${humidity}%" : "high at ${humidity}%"})"
     return result
 
 
@@ -2195,7 +2237,7 @@ def getRemainTime(timeLimit, timeStamp){
     {
         return 0
     }
-    
+
     // get the remaining time given the time limit
     float minutes = (timeLimit - elapsedTime)/1000/60 // remaining minutes
     float hours = (timeLimit - elapsedTime)/1000/60/60 // remaining hours
@@ -2328,8 +2370,9 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
             }
         }
     }
-
-  if(bedSensorTimeLimit != null) // if user set a time limit
+    atomicState.lastButtonEvent = atomicState.lastButtonEvent != null ? atomicState.lastButtonEvent : now()
+    boolean newEvent = now() - atomicState.lastButtonEvent < 5000 // check that this is not a new request
+    if(bedSensorTimeLimit != null) // if user set a time limit
     {
         // forward declaration in updated() would generate false positive of atomicState.lastTimeBsTrue, 
         // so we need to test that it has been initialized first by an actual event
@@ -2338,7 +2381,8 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
             def remainTime = getRemainTime(bedSensorTimeLimit, atomicState.lastTimeBsTrue)
             def message = "SIMPLE MODE - remaining time: ${remainTime}"
             descriptiontext formatText(message, "white", "grey")
-            if(remainTime <= 0) // time is up
+
+            if(remainTime <= 0 && !newEvent) // time is up
             {
                 result = false 
                 atomicState.lastResultWasTrue = false
@@ -2347,13 +2391,18 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
             {
                 result = true // return true as long as time limit hasn't been reached and atomicState.buttonPushed = true
                 atomicState.lastResultWasTrue = true
-            }               
+            }
+            else
+            {
+                log.error "ERROR 5244"
+            }
         }
     }
 
     logging"bed sensor boolean returns $result"   
+    log.warn "atomicState.lastResultWasTrue = $atomicState.lastResultWasTrue"
 
-    if(!atomicState.lastResultWasTrue && result == true)
+    if(newEvent && result == true)
     {
         // time stamp this new value
         atomicState.lastTimeBsTrue = now()
@@ -2442,13 +2491,20 @@ def Poll(){
         descriptiontext "location in restricted mode, doing nothing"
         return
     } 
+    if(atomicState.paused == true)
+    {
+        return
+    }
+    
+    boolean override = atomicState.override   
     boolean thermPoll = thermostat.hasCommand("poll")
     boolean thermRefresh = thermostat.hasCommand("refresh") 
     boolean outsidePoll = outsideTemp.hasCommand("poll")
-    boolean outsideRefresh = outsideTemp.hasCommand("refresh")
-    boolean override = atomicState.override    
+    boolean outsideRefresh = outsideTemp.hasCommand("refresh") 
     boolean heaterPoll = heater?.hasCommand("poll")
     boolean heaterRefresh = heater?.hasCommand("refresh") 
+    boolean coolerPoll = cooler?.hasCommand("poll")
+    boolean coolerRefresh = cooler?.hasCommand("refresh") 
     boolean pwPoll = pw?.hasCommand("poll")
     boolean pwRefresh = pw?.hasCommand("refresh") 
 
@@ -2469,13 +2525,21 @@ def Poll(){
         descriptiontext("polling $outsideTemp")
     }
 
+    if(coolerRefresh){
+        cooler?.refresh()
+        descriptiontext("refreshing $cooler")
+    }
+    if(coolerPoll){
+        cooler?.poll()
+        descriptiontext("polling $cooler")
+    }
 
     if(heaterRefresh){
-        heater.refresh()
+        heater?.refresh()
         descriptiontext("refreshing $heater")
     }
     if(heaterPoll){
-        heater.poll()
+        heater?.poll()
         descriptiontext("polling $heater")
     }
 

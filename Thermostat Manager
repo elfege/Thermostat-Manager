@@ -321,18 +321,22 @@ def contactsensors(){
                 if(doorsContacts && doorThermostat)
                 {
                     paragraph "when ${doorsContacts?.size()>1?"any of":""} ${doorsContacts} ${doorsContacts?.size()>1?"are":"is"} open, $thermostat will synchornise with $doorThermostat"
-                }
-                if(UseSimpleMode)
-                {
-                    input "overrideSimpleMode", "bool", title: "This option overrides ${simpleModeContact && simpleModeButton ? "$simpleModeContact && $simpleModeButton" : simpleModeButton ? "$simpleModeButton" : "$simpleModeContact" }'s events"
-
-                }
-                if(doorsContacts)
-                {
-                    input "useDifferentSetOfSensors", "bool", title: "Use a different set of temperature sensors when ${doorsContacts} ${doorsContacts.size()>1?"are":"is"} open", submitOnChange:true
-                    if(useDifferentSetOfSensors)
+                    if(motionSensors)
                     {
-                        input "doorSetOfSensors", "capability.temperatureMeasurement", title: "Select your sensors", multiple:true, submitOnChange:true, required:true
+                        input "doorsOverrideMotion", "bool", title: "This option overrides motion based power savings", defaultValue:true, submitOnChange:true
+                    }
+                    if(UseSimpleMode)
+                    {
+                        input "overrideSimpleMode", "bool", title: "This option overrides ${simpleModeContact && simpleModeButton ? "$simpleModeContact && $simpleModeButton" : simpleModeButton ? "$simpleModeButton" : "$simpleModeContact" }'s events"
+
+                    }
+                    if(doorsContacts)
+                    {
+                        input "useDifferentSetOfSensors", "bool", title: "Use a different set of temperature sensors when ${doorsContacts} ${doorsContacts.size()>1?"are":"is"} open", submitOnChange:true
+                        if(useDifferentSetOfSensors)
+                        {
+                            input "doorSetOfSensors", "capability.temperatureMeasurement", title: "Select your sensors", multiple:true, submitOnChange:true, required:true
+                        }
                     }
                 }
             }
@@ -1864,10 +1868,11 @@ def getNeed(desired, simpleModeContactClosed, inside){
     def humidity = outsideTemp?.currentValue("humidity") 
     def insideHum = getInsideHumidity() // backup for windows and value used for negative swing variation when cooling   
     humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50)
-    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !simpleModeContactClosed 
+    boolean doorContactsAreOpen = doorsContactsAreOpen()
+    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !simpleModeContactClosed && (!doorContactsAreOpen && doorsOverrideMotion)
     boolean inWindowsModes = windows && location.mode in windowsModes
     boolean contactClosed = !contactsAreOpen()  
-    boolean doorContactsAreOpen = doorsContactsAreOpen()
+
     def outsideThres = getOutsideThershold()
     def outsideTemperature = outsideTemp.currentValue("temperature")
     def need0 = ""

@@ -37,6 +37,9 @@ def settings() {
 
     dynamicPage(pageProperties) {
 
+        section() {
+            label title: "Assign a name", required: false
+        }
         section()
         {
             input "pause", "button", title: "$atomicState.button_name"
@@ -48,7 +51,6 @@ def settings() {
             }
             input "restricted", "mode", title: "Restricted modes", multiple: true
         }
-
         section("Main Settings") {
             href "thermostats", title: "Thermostats and other devices", description: ""
             href "methods", title: "Methods of evaluation", description: ""
@@ -56,11 +58,6 @@ def settings() {
             href "powersaving", title: "Power Saving Options", description: ""
 
         }
-
-        section() {
-            label title: "Assign a name", required: false
-        }
-
         section("Actions")
         {
             input "run", "button", title: "RUN"
@@ -100,23 +97,35 @@ def thermostats(){
         section("Select the thermostat you want to control")
         { 
             input "thermostat", "capability.thermostat", title: "select a thermostat", required: true, multiple: false, description: null, submitOnChange:true
+            // verify not only capability, but also actual reading, some thermostats working with generic drivers
+            // will return true to some capabilities while the hardware won't parse any value
+            boolean hasHumidity = thermostat != null && thermostat.hasCapability("RelativeHumidityMeasurement") && thermostat.currentValue("humidity") != null
+            log.debug "$thermostat has humidity capability ? $hasHumidity"
+            if(thermostat && !hasHumidity && !optionalHumSensor)
+            {
+                paragraph formatText("""Your thermostat doesn't support humidity measurement (or doesn't return any humidity value). As a consequence, you must select a separate humidity sensor""", "white", "blue")
+            }
+            if(thermostat && !hasHumidity)
+            {
+                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "Select a humidity sensor", required:false, submitOnChange:true
+            }
             input "forceCmd", "bool", title:"Force commands (for old non-Zwave-plus devices that don't refresh their status properly under certain mesh conditions)", defaultValue:false
             input "pw", "capability.powerMeter", title:"verify status with a power meter", required:false
             input "heatpump", "bool", title: "$thermostat is a heat pump", submitOnChange:true
+            if(restricted)
+            {
+                input "restrictedThermMode", "enum", title:"Select default's thermostat operation once your location is in restricted mode", options:["off", "cool", "heat", "auto"], required:false, defaultValue: "off", submitOnChange:true
+                if(restrictedThermMode == "auto")
+                {
+                    paragraph formatText("Beware that 'auto' is the override mode, which means that this app won't be able to control your thermostat until you set your thermostat back to either 'cool', 'heat' or 'off'", "white", "red")
+                }
+            }
         }
 
         section("Sensors")
         {
             input "outsideTemp", "capability.temperatureMeasurement", title: "Required: select a weather sensor for outside temperature", required:true, submitOnChange:true
-            // verify not only capability but actual reading, some thermostats working with generic drivers
-            // will return true to some capabilities while the hardware won't parse any value
-            boolean hasHumidity = thermostat != null && thermostat.hasCapability("RelativeHumidityMeasurement") && thermostat.currentValue("humidity") != null
-            if(hasHumidity)
-            {
-                paragraph formatText("""Your thermostat doesn't support humidity measurement, please select a separate humidity sensor so as to make sure 
-that this app gives its best at keeping you comfortable!""", "white", "blue")
-                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "Select a humidity sensor", required:false, submitOnChange:true
-            }
+
             input "sensor", "capability.temperatureMeasurement", title: "select a temperature sensor (optional)", submitOnChange:true, multiple:true
             if(sensor)
             {
@@ -247,49 +256,49 @@ def contactsensors(){
                 input "openDelay", "number", title: "After how long?", description: "Time in seconds", required:true
             }
 
-            input "useAbedSensor", "bool", title: "Use a bed sensor", submitOnChange:true
-            if(useAbedSensor)
+            input "UseSimpleMode", "bool", title: "Use a simple mode trigger", submitOnChange:true
+            if(UseSimpleMode)
             {
                 def message = ""
                 def devivesStr = ""
 
-                input "bedSensorType", "enum", title: "Which type ?", options: ["contact", "button", "both"], submitOnChange:true, required:true
-                if(bedSensorType == "contact" || bedSensorType == "both")
+                input "simpleModeTriggerType", "enum", title: "Which type ?", options: ["contact", "button", "both"], submitOnChange:true, required:true
+                if(simpleModeTriggerType == "contact" || simpleModeTriggerType == "both")
                 {
-                    def s = bedSensorContact?.size() 
+                    def s = simpleModeContact?.size() 
                     def i = 0
-                    input "bedSensorContact", "capability.contactSensor", title: "When ${!bedSensorContact ? "this contact is" : (s > 1 ? "these contacts are" : "this contacts is")} closed, operate in limited mode", multiple: true, required: false, submitOnChange:true
-                    if(bedSensorContact)
+                    input "simpleModeContact", "capability.contactSensor", title: "When ${!simpleModeContact ? "this contact is" : (s > 1 ? "these contacts are" : "this contacts is")} closed, operate in limited mode", multiple: true, required: false, submitOnChange:true
+                    if(simpleModeContact)
                     {
                         for(s!=0;i<s;i++){
-                            devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + bedSensorContact[i].toString() : bedSensorContact[i].toString()
+                            devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + simpleModeContact[i].toString() : simpleModeContact[i].toString()
                         } 
-                        message = bedSensorContact ? "$app.label will work in limited mode when $devivesStr ${s > 1 ? "are" : "is"} closed and/or ${s > 1 ? "have" : "has"} been closed within 1 minute. Power saving options will not be active ${bedSensorType == "both" ? "Button supercedes this sensor":""}" : ""
+                        message = simpleModeContact ? "$app.label will work in limited mode when $devivesStr ${s > 1 ? "are" : "is"} closed and/or ${s > 1 ? "have" : "has"} been closed within 1 minute. Power saving options will not be active ${simpleModeTriggerType == "both" ? "Button supercedes this sensor":""}" : ""
                         paragraph formatText(message, "white", "grey")
                     }
                 }
-                if(bedSensorType == "button" || bedSensorType == "both")
+                if(simpleModeTriggerType == "button" || simpleModeTriggerType == "both")
                 {
-                    def s = bedSensorButton?.size() 
+                    def s = simpleModeButton?.size() 
                     def i = 0
-                    input "bedSensorButton", "capability.holdableButton", title: "When ${!bedSensorButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} pushed, work in limited mode (hold or push again to cancel)", multiple: true, required: false, submitOnChange:true
-                    input "bedSensorTimeLimit", "number", title: "Optional: return to normal operation after a certain amount of time", descripition: "Time in hours", submitOnChange:true
-                    if(bedSensorButton)
+                    input "simpleModeButton", "capability.holdableButton", title: "When ${!simpleModeButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} pushed, work in limited mode (hold or push again to cancel)", multiple: true, required: false, submitOnChange:true
+                    input "simpleModeTimeLimit", "number", title: "Optional: return to normal operation after a certain amount of time", descripition: "Time in hours", submitOnChange:true
+                    if(simpleModeButton)
                     {
                         for(s!=0;i<s;i++){
-                            devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + bedSensorButton[i].toString() : bedSensorButton[i].toString()
+                            devivesStr = devivesStr.length() > 0 ? devivesStr + ", " + simpleModeButton[i].toString() : simpleModeButton[i].toString()
                         } 
-                        if(bedSensorTimeLimit)
+                        if(simpleModeTimeLimit)
                         {
-                            message = "Limited mode will be canceled after $bedSensorTimeLimit hours or after a new button event" //. Note that $devivesStr will not be able to cancel limited mode before time is out" 
+                            message = "Limited mode will be canceled after $simpleModeTimeLimit hours or after a new button event" //. Note that $devivesStr will not be able to cancel limited mode before time is out" 
                             paragraph formatText(message, "white", "grey") 
                         }
-                        message = bedSensorButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed and canceled when held, double tapped or pushed again. Power saving options will not be active. ${bedSensorType == "both" ? "Note taht $bedSensorButton supercede $bedSensorContact":""}" : ""
+                        message = simpleModeButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed and canceled when held, double tapped or pushed again. Power saving options will not be active. ${simpleModeTriggerType == "both" ? "Note taht $simpleModeButton supercede $simpleModeContact":""}" : ""
                     }
                 }
                 paragraph formatText(message, "white", "grey")
-                def bedDevice = bedSensorType == "contact" ? bedSensorContact : bedSensorButton
-                input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${bedSensorType == "contact" ? "closed" : "pushed"}", submitOnChange:true, defaultValue:false
+                def bedDevice = simpleModeTriggerType == "contact" ? simpleModeContact : simpleModeButton
+                input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${simpleModeTriggerType == "contact" ? "closed" : "pushed"}", submitOnChange:true, defaultValue:false
                 input "specialSubstraction", "bool", title: "Lower the current set point instead?", submitOnChange:true
 
                 if(setSpecialTemp)
@@ -313,9 +322,9 @@ def contactsensors(){
                 {
                     paragraph "when ${doorsContacts?.size()>1?"any of":""} ${doorsContacts} ${doorsContacts?.size()>1?"are":"is"} open, $thermostat will synchornise with $doorThermostat"
                 }
-                if(useAbedSensor)
+                if(UseSimpleMode)
                 {
-                    input "overrideSimpleMode", "bool", title: "This option overrides ${bedSensorContact && bedSensorButton ? "$bedSensorContact && $bedSensorButton" : bedSensorButton ? "$bedSensorButton" : "$bedSensorContact" }'s events"
+                    input "overrideSimpleMode", "bool", title: "This option overrides ${simpleModeContact && simpleModeButton ? "$simpleModeContact && $simpleModeButton" : simpleModeButton ? "$simpleModeButton" : "$simpleModeContact" }'s events"
 
                 }
                 if(doorsContacts)
@@ -473,7 +482,7 @@ def updated() {
     initialize()
 }
 def initialize(){
-
+    log.info "initializing"
     if(enabledebug)
     {
         log.warn "debug enabled"      
@@ -555,14 +564,14 @@ def initialize(){
             log.debug "$windows subscribed to contactHandler()"
         }
     }
-    if(bedSensorContact)
+    if(simpleModeContact)
     {        
-        subscribe(bedSensorContact, "contact", bedSensorContactHandler)
+        subscribe(simpleModeContact, "contact", simpleModeContactHandler)
     }
-    if(bedSensorButton)
+    if(simpleModeButton)
     {
-        subscribe(bedSensorButton, "held", holdableButtonHandler)   
-        subscribe(bedSensorButton, "pushed", holdableButtonHandler)   
+        subscribe(simpleModeButton, "held", holdableButtonHandler)   
+        subscribe(simpleModeButton, "pushed", holdableButtonHandler)   
 
     }
     if(buttonPause)
@@ -595,19 +604,20 @@ def initialize(){
 def modeChangeHandler(evt){
     log.debug "$evt.name is now $evt.value"
 
-    //if(evt.value in powersavingmode || !Active())
-    //{
-    //atomicState.openByApp = true
-    //atomicState.closedByApp = true  
-    //}
+    if(location.mode in restricted)
+    {
+        log.trace "$thermostat set to $restrictedThermMode due to restricted mode"
+        thermostat."${restrictedThermMode}"()
+    }
+    else
+    {
+        log.trace "location not in restricted mode, resuming normal operations"
+    }
 
-    mainloop()
+    //mainloop()
 }
 def appButtonHandler(btn) {
-    if(location.mode in restricted){
-        descriptiontext "location in restricted mode, doing nothing"
-        return
-    } 
+
     switch(btn) {
         case "pause":atomicState.paused = !atomicState.paused
         logging("atomicState.paused = $atomicState.paused")
@@ -669,7 +679,7 @@ def temperatureHandler(evt){
         mainloop()
     }
 }
-def bedSensorContactHandler(evt){
+def simpleModeContactHandler(evt){
     if(!atomicState.paused){
         if(location.mode in restricted){
             descriptiontext "location in restricted mode, doing nothing"
@@ -679,7 +689,7 @@ def bedSensorContactHandler(evt){
 
         atomicState.lastBSeventStamp = new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
 
-        if(now() - atomicState.lastBSevent > 60000) // prevent false positives due to floating state of the bed sensor due to the mattress's weight (still working on this...)
+        if(now() - atomicState.lastBSevent > 60000) // prevent false positives due to floating state of the simple mode trigger due to the mattress's weight (still working on this...)
         {
             atomicState.ButtonSupercedes = false // if there's a new contact event, this means it is working as expected, therefore no need for the button to supercede the sensor
         }
@@ -808,7 +818,7 @@ sync ? $sync
 thermostatB: $thermostatB
 
 """    
-           
+
         if(sync && thermostatB)
         {
             def cmd = "set${evt.name.capitalize()}"
@@ -875,12 +885,12 @@ evt.value = $evt.value
 """
             logging "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"
 
-            boolean bedsensorclosed = bedSensorIsClosed()
-            def desired = getDesired(bedsensorclosed)
+            boolean simpleModeActive = simpleModeIsActive()
+            def desired = getDesired(simpleModeActive)
 
             def inside = getInsideTemp()
             atomicState.inside = atomicState.inside != null ? atomicState.inside : inside
-            def needData = getNeed(desired, bedsensorclosed, inside)
+            def needData = getNeed(desired, simpleModeActive, inside)
             def need = needData[1]
             def cmd = "set"+"${needData[0]}"+"ingSetpoint" // "Cool" or "Heat" with a capital letter
 
@@ -958,13 +968,13 @@ def updateValues(evtVal){
 
     evtVal = Double.parseDouble(evtVal)
     def lastSetpoint = atomicState.lastSetPoint.toDouble()
-    
+
     log.warn """
 evtVal instanceof Double ? ${evtVal instanceof Double}
 tempConvertVal instanceof Double ? ${tempConvertVal instanceof Double}
 tempConvertVal instanceof String ? ${tempConvertVal instanceof String}
 """
-    
+
     def outside = outsideTemp.currentValue("temperature")
     def outsideThreshold = getOutsideThershold()
     def needSituation = outside < outsideThreshold ? "heat" : "cool"
@@ -1097,19 +1107,19 @@ def mainloop(){
             return
         }    
 
-        boolean bedsensorclosed = bedSensorIsClosed()
-        boolean motionActive = Active() || bedSensorContactClosed
+        boolean simpleModeActive = simpleModeIsActive()
+        boolean motionActive = Active() || simpleModeContactClosed
         boolean contactClosed = !contactsAreOpen()
         boolean doorContactsAreOpen = doorsContactsAreOpen()
 
-        int desired = getDesired(bedsensorclosed)
+        int desired = getDesired(simpleModeActive)
 
 
 
         def inside = getInsideTemp()
         def outside = outsideTemp.currentValue("temperature")
         descriptiontext "outside temperature is $outside"
-        def needData = getNeed(desired, bedsensorclosed, inside)
+        def needData = getNeed(desired, simpleModeActive, inside)
         def need = needData[1]
 
         def currSP = thermostat?.currentValue("thermostatSetpoint")
@@ -1533,9 +1543,9 @@ def virtualThermostat(need){
         }
     }
 }
-def windowsManagement(desired, bedSensorContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh){
+def windowsManagement(desired, simpleModeContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh){
 
-    if(controlWindows && windows && !bedSensorContactClosed && !atomicState.override)
+    if(controlWindows && windows && !simpleModeContactClosed && !atomicState.override)
     {
         def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
         boolean tooHumid = humidity >= 90 ? true : humidity >= humThres 
@@ -1763,17 +1773,17 @@ needToClose = $needToClose
                 }
             }
         }
-        else if(windows && bedSensorContactClosed){
-            logging "no windows management due to $bedSensorContact"
+        else if(windows && simpleModeContactClosed){
+            logging "no windows management due to $simpleModeContact"
         }
 
     }
     else if(!windows) {
         logging "user did not select any window switch"
     }
-    else if(bedSensorContactClosed)
+    else if(simpleModeContactClosed)
     {
-        descriptiontext "skipping windows management due to bed sensor mode"
+        descriptiontext "skipping windows management due to simple mode trigger mode"
     }
     else if(atomicState.override)
     {
@@ -1785,7 +1795,7 @@ needToClose = $needToClose
 
 
 /************************************************DECISIONS******************************************************/
-def getDesired(bedsensorclosed){
+def getDesired(simpleModeActive){
     int desired = 70 // default value
     def inside = getInsideTemp()
 
@@ -1797,18 +1807,18 @@ def getDesired(bedsensorclosed){
     {
         desired = dimmer?.currentValue("level")
     }
-    if(bedsensorclosed)
+    if(simpleModeActive)
     {
         if(doorsContactsAreOpen() && overrideSimpleMode)
         {
-            descriptiontext "some doors are open: bed sensor mode ignored at user's request"
+            descriptiontext "some doors are open: simple mode trigger mode ignored at user's request"
         }
         else if(setSpecialTemp || specialSubstraction)
         {       
             desired = specialSubstraction ? desired - substract : specialTemp
 
             descriptiontext "desired temperature ${substract ? "(specialSubstraction)":"(specialTemp)"} is: $desired and last recorded temperature is ${inside}"
-            return desired // END due to bed sensor mode
+            return desired // END due to simple mode trigger mode
         }
         else
         {
@@ -1849,12 +1859,12 @@ def getInsideHumidity(){
     }
     descriptiontext "Inside humidity is ${result}%"
 }
-def getNeed(desired, bedSensorContactClosed, inside){
+def getNeed(desired, simpleModeContactClosed, inside){
 
     def humidity = outsideTemp?.currentValue("humidity") 
     def insideHum = getInsideHumidity() // backup for windows and value used for negative swing variation when cooling   
     humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50)
-    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !bedSensorContactClosed 
+    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !simpleModeContactClosed 
     boolean inWindowsModes = windows && location.mode in windowsModes
     boolean contactClosed = !contactsAreOpen()  
     boolean doorContactsAreOpen = doorsContactsAreOpen()
@@ -1869,24 +1879,24 @@ def getNeed(desired, bedSensorContactClosed, inside){
     def coolswing = insideHum < 60 ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
 
-    boolean needCool = !bedSensorContactClosed ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= desired + swing) : outsideTemperature >= outsideThres + 5 && inside >= desired + swing
+    boolean needCool = !simpleModeContactClosed ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= desired + swing) : outsideTemperature >= outsideThres + 5 && inside >= desired + swing
 
     logging"""
 outsideTemperature >= outsideThres + 5 = ${outsideTemperature >= outsideThres + 5}
 outsideTemperature = $outsideTemperature
 outsideThres + 5 = ${outsideThres + 5}
 needCool = $needCool
-bedSensorContactClosed = $bedSensorContactClosed
+simpleModeContactClosed = $simpleModeContactClosed
 
 """
-    boolean needHeat = !bedSensorContactClosed ? (outsideTemperature < outsideThres /* makes heat run during summer... || amplitudeTooHigh*/) && inside <= desired - swing : inside <= desired - swing && outsideTemperature < outsideThres
+    boolean needHeat = !simpleModeContactClosed ? (outsideTemperature < outsideThres /* makes heat run during summer... || amplitudeTooHigh*/) && inside <= desired - swing : inside <= desired - swing && outsideTemperature < outsideThres
 
     //log.warn "inside = $inside inside >= desired + swing : ${inside >= desired + swing} |||needCool=$needCool"
 
-    boolean motionActive = Active() || bedSensorContactClosed
+    boolean motionActive = Active() || simpleModeContactClosed
 
-    // shoulder season management: bedsensor forces ac to run despite cold outside if it gets too hot inside
-    boolean norHeatNorCool = !needCool && !needHeat && inside > desired + swing && bedSensorContactClosed && outsideTemperature >= 55 ? true : false
+    // shoulder season management: simple mode trigger forces ac to run despite cold outside if it gets too hot inside
+    boolean norHeatNorCool = !needCool && !needHeat && inside > desired + swing && simpleModeContactClosed && outsideTemperature >= 55 ? true : false
     // the other room could be in an inadequate mode, which would be noticed by an undesirable temperature amplitude
     boolean unacceptable = doorContactsAreOpen && !atomicState.override && (inside < desired - 2 || inside > desired + 2) // if it gets too cold or too hot, ignore doorsManagement
     logging """inside = $inside 
@@ -2003,26 +2013,26 @@ inside > criticalcold :  ${inside > criticalcold}
 
     }
 
-    windowsManagement(desired, bedSensorContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh)
+    windowsManagement(desired, simpleModeContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh)
 
     logging"""
-bedSensorContactClosed = $bedSensorContactClosed
+simpleModeContactClosed = $simpleModeContactClosed
 doorContactsAreOpen = $doorContactsAreOpen
 !overrideSimpleMode = ${!overrideSimpleMode}
-bedSensorIsClosed() = ${bedSensorIsClosed()}
+simpleModeIsActive() = ${simpleModeIsActive()}
 """
 
-    if((bedSensorContactClosed && !doorContactsAreOpen) || (!doorContactsAreOpen && !overrideSimpleMode && bedSensorContactClosed))
+    if(UseSimpleMode && ((simpleModeContactClosed && !doorContactsAreOpen) || (!doorContactsAreOpen && !overrideSimpleMode && simpleModeContactClosed)))
     {
         log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Enabled</div>"
     }
-    else if(useAbedSensor && bedSensorContactClosed && overrideSimpleMode && doorsOpen)
+    else if(UseSimpleMode && simpleModeContactClosed && overrideSimpleMode && doorsOpen)
     {
-        log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Called but NOT active due to doors</div>"
+        log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Called but NOT active due to doors being open</div>"
     }
-    else if(useAbedSensor)
+    else if(UseSimpleMode)
     {
-        log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Disabled</div>"
+        descriptiontext "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Disabled</div>"
     }
 
     need = [need0, need1]
@@ -2050,7 +2060,7 @@ inside > coolswing = ${inside > coolswing}
 inside > desired = ${inside > desired}
 inside < desired = ${inside < desired}
 
-bedSensorContactClosed = $bedSensorContactClosed (bedSensorType = $bedSensorType)
+simpleModeContactClosed = $simpleModeContactClosed (simpleModeTriggerType = $simpleModeTriggerType)
 contactClosed = $contactClosed (open = $atomicState.listOfOpenContacts)
 outsideThres = $outsideThres
 outsideTemperature > desired = ${outsideTemperature > desired}
@@ -2128,11 +2138,13 @@ def getVariationAmplitude(outside, need){
     def ya = desiredVar != null ? desiredVar : 1 // coressponding difference required when outside temperature = xa
     ya = ya.toFloat()
     def xa = refTemp != null ? refTemp : 77 // 
+    xa = xa.toFloat()
     def slope = 0.8
     def m = need == "cool" ? slope : (slope + 0.1)*-1  // slope 
     //def a = -1 // offset
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
+
     logging """
 y = $y
 outside = $outside
@@ -2329,36 +2341,36 @@ boolean contactsAreOpen(){
     logging """contacts: $contact open ?: ${listOpen}"""
     return Open
 }
-boolean bedSensorIsClosed(){
+boolean simpleModeIsActive(){
     boolean result =  atomicState.lastResultWasTrue 
-    //boolean doorOpen = doorsContactsAreOpen() // FEEDBACK LOOP since doorsContactsAreOpen() function calls bedSensorIsClosed()
+    //boolean doorOpen = doorsContactsAreOpen() // FEEDBACK LOOP since doorsContactsAreOpen() function calls simpleModeIsActive()
     boolean currentlyClosed = false 
 
-    if(useAbedSensor)
+    if(UseSimpleMode)
     {
-        if(bedSensorType == "contact" || bedSensorType == "both" )
+        if(simpleModeTriggerType == "contact" || simpleModeTriggerType == "both" )
         {
             def Dtime = 60000
-            int s = bedSensorContact.size() 
+            int s = simpleModeContact.size() 
             int i = 0
             def thisDeviceEvents = []
             int events = 0
-            def findClosed = bedSensorContact.findAll{it?.currentValue("contact") == "closed"}
+            def findClosed = simpleModeContact.findAll{it?.currentValue("contact") == "closed"}
             currentlyClosed = findClosed.size() != 0
 
             atomicState.ButtonSupercedes = atomicState.ButtonSupercedes != null ? atomicState.ButtonSupercedes : true
             atomicState.lastBSeventStamp = atomicState.lastBSeventStamp != null ? atomicState.lastBSeventStamp : new Date().format("h:mm:ss a", location.timeZone) // formated time stamp for debug purpose
 
             def loggingMessage = """
-BED SENSOR DATA
+simple mode trigger DATA
 currentlyClosed = $currentlyClosed
 atomicState.ButtonSupercedes = $atomicState.ButtonSupercedes
-last bed sensor contact event = ${atomicState.lastBSeventStamp}
+last simple mode trigger contact event = ${atomicState.lastBSeventStamp}
 
 """
             log.debug (formatText(loggingMessage, "white", "#39CC37"))
 
-            if(bedSensorType == "both")
+            if(simpleModeTriggerType == "both")
             {                
 
                 if(atomicState.buttonPushed)
@@ -2387,16 +2399,16 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
             {
                 for(s != 0; i < s; i++) // collect active events
                 { 
-                    thisDeviceEvents = bedSensorContact[i].eventsSince(new Date(now() - Dtime)).findAll{it.value in ["closed", "open"]} // collect ALL motion events for each sensor separately
+                    thisDeviceEvents = simpleModeContact[i].eventsSince(new Date(now() - Dtime)).findAll{it.value in ["closed", "open"]} // collect ALL motion events for each sensor separately
                     events += thisDeviceEvents.size() 
                 }
-                descriptiontext "$bedSensorContact ${s>1? "were":"was"} closed $events times in the last ${Dtime/1000} seconds"
+                descriptiontext "$simpleModeContact ${s>1? "were":"was"} closed $events times in the last ${Dtime/1000} seconds"
                 result = events > 0
-                logging("$bedSensorContact closed ?: $result")
+                logging("$simpleModeContact closed ?: $result")
             }
             atomicState.lastResultWasTrue = atomicState.lastResultWasTrue ? true : false
         }
-        else if(bedSensorType == "button")
+        else if(simpleModeTriggerType == "button")
         {
             logging "-- atomicState.buttonPushed = $atomicState.buttonPushed"
             if(atomicState.buttonPushed)
@@ -2413,13 +2425,13 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
     }
     atomicState.lastButtonEvent = atomicState.lastButtonEvent != null ? atomicState.lastButtonEvent : now()
     boolean newEvent = now() - atomicState.lastButtonEvent < 5000 // check that this is not a new request
-    if(bedSensorTimeLimit != null) // if user set a time limit
+    if(simpleModeTimeLimit != null) // if user set a time limit
     {
         // forward declaration in updated() would generate false positive of atomicState.lastTimeBsTrue, 
         // so we need to test that it has been initialized first by an actual event
         if(atomicState.lastTimeBsTrue != null && atomicState.buttonPushed) 
         {
-            def remainTime = getRemainTime(bedSensorTimeLimit, atomicState.lastTimeBsTrue)
+            def remainTime = getRemainTime(simpleModeTimeLimit, atomicState.lastTimeBsTrue)
             def message = "SIMPLE MODE - remaining time: ${remainTime}"
             descriptiontext formatText(message, "white", "grey")
 
@@ -2440,7 +2452,7 @@ last bed sensor contact event = ${atomicState.lastBSeventStamp}
         }
     }
 
-    logging"bed sensor boolean returns $result"   
+    logging"simple mode trigger boolean returns $result"   
     //log.warn "atomicState.lastResultWasTrue = $atomicState.lastResultWasTrue"
 
     if(newEvent && result == true)
@@ -2460,9 +2472,9 @@ boolean doorsContactsAreOpen(){
         listOpen = doorsContacts?.findAll{it?.currentValue("contact") == "open"}
         Open = listOpen.size() > 0
     }
-    if(Open && !overrideSimpleMode && bedSensorIsClosed())
+    if(Open && !overrideSimpleMode && simpleModeIsActive())
     {
-        descriptiontext "$doorsContacts open but $bedSensorContact is closed and user doesn't wish to override"
+        descriptiontext "$doorsContacts open but $simpleModeContact is closed and user doesn't wish to override"
         return false
     }
 

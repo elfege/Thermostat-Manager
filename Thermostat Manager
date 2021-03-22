@@ -21,6 +21,8 @@ preferences {
     page name: "methods"
     page name: "contactsensors"
     page name: "powersaving"
+    page name: "comfortSettings"
+    page name: "windowsManagement"
 
 }
 def settings() {
@@ -54,8 +56,10 @@ def settings() {
         section("Main Settings") {
             href "thermostats", title: "Thermostats and other devices", description: ""
             href "methods", title: "Methods of evaluation", description: ""
-            href "contactsensors", title: "Contact sensors", description: ""
-            href "powersaving", title: "Power Saving Options", description: ""
+            href "contactsensors", title: "Power Saving and Contacts Sensors", description: ""
+            href "powersaving", title: "Power Saving and Motion", description: ""           
+            href "windowsManagement", title: "Power Saving and Windows Control", description: ""
+            href "comfortSettings", title: "Comfort Options (bed time)", description: ""
 
         }
         section("Actions")
@@ -356,6 +360,20 @@ def powersaving(){
             }
             input "fancirculate", "bool", title:"Run ${thermostat}'s fan circulation when contacts are open and temp is getting too high", defaultValue:true
         }
+    }
+}
+def comfortSettings(){
+
+    def title = formatText("COMFORT SETTINGS","white", "grey")
+
+    def pageProperties = [
+        name:       "comfortSettings",
+        title:      title,
+        nextPage:   "settings",
+        install: false,
+        uninstall: false
+    ]
+    dynamicPage(pageProperties) {
         section(formatText("Simple comfort mode", "white", "blue")){
             input "UseSimpleMode", "bool", title: "Use a simple mode trigger", submitOnChange:true
             if(UseSimpleMode)
@@ -396,7 +414,19 @@ def powersaving(){
                 input "substract", "number", title: "Substract this value to the current set point", required:true 
             }
         }
+    }
+}
+def windowsManagement(){
+    def title = formatText("WINDOWS SETTINGS","white", "grey")
 
+    def pageProperties = [
+        name:       "windowsManagement",
+        title:      title,
+        nextPage:   "settings",
+        install: false,
+        uninstall: false
+    ]
+    dynamicPage(pageProperties) {
         section(formatText("Fans or Windows", "white", "blue"))
         {
             input "controlWindows", "bool", title: "Control some windows", submitOnChange:true
@@ -1566,11 +1596,19 @@ def virtualThermostat(need){
 
     def outsideTemperature = outsideTemp?.currentValue("temperature") // only needed if electric heater here
     def lowTemperature = lowtemp ? lowtemp : heatpump && !lowtemp ? 28 : 40
-    boolean lowLimitReached = !thermostat ? true : heatpump ? addLowTemp && outsideTemperature < lowTemperature : true 
-    //if heatpump, lowLimitReached is when it's too cold outside for a heatpump to remain efficient, so the heater has to take over, if any...
-    //if heater and no heatpump, lowLimitReached is when it's when it's so cold that heater has to come help
+    boolean lowLimitReached = !thermostat ? true : (heater || heatpump) && (addLowTemp || heatpump) ? outsideTemperature < lowTemperature : true 
+    //if heatpump, lowLimitReached is when it's too cold outside for a heatpump to remain efficient, or if threshold has been reached so the heater has to take over, if any...
+    //if heater and no heatpump, lowLimitReached is when it's so cold that heater has to come and help
     //if heater AND no thermostat, heater runs all the time when needed, no low limit so lowLimitReached returns true
 
+/*    log.warn """
+heatpump ? $heatpump
+!thermostat ? ${!thermostat}
+lowlimit reached ? $lowLimitReached
+lowtemp = $lowtemp
+outsideTemperature = $outsideTemperature
+"""
+*/
     if(heater)
     {
         boolean tooMuchPower = false
@@ -1604,6 +1642,8 @@ def virtualThermostat(need){
             else
             {
                 descriptionText "$heater not turning on because low temp limit outside hasn't been reached yet"
+                logging("Turning $heater off")
+            heater?.off()
             }
 
         }
@@ -2661,7 +2701,7 @@ def pollPowerMeters(){
         descriptionText("refreshing $pw")
     }
     if(pwPoll){
-        sensor.poll()
+        pw.poll()
         descriptionText("polling $pw")
     }
     if(heaterRefresh){

@@ -41,6 +41,7 @@ def settings() {
 
         section() {
             label title: "Assign a name", required: false
+            input "celcius", "bool", title: "Celcius"
         }
         section()
         {
@@ -1601,7 +1602,7 @@ def virtualThermostat(need){
     //if heater and no heatpump, lowLimitReached is when it's so cold that heater has to come and help
     //if heater AND no thermostat, heater runs all the time when needed, no low limit so lowLimitReached returns true
 
-/*    log.warn """
+    /*    log.warn """
 heatpump ? $heatpump
 !thermostat ? ${!thermostat}
 lowlimit reached ? $lowLimitReached
@@ -1643,7 +1644,7 @@ outsideTemperature = $outsideTemperature
             {
                 descriptionText "$heater not turning on because low temp limit outside hasn't been reached yet"
                 logging("Turning $heater off")
-            heater?.off()
+                heater?.off()
             }
 
         }
@@ -1997,8 +1998,11 @@ def getNeed(desired, simpleModeContactClosed, inside){
     def need = []
     def amplThreshold = 2
     def amplitude = Math.abs(inside - desired)
-    def swing = outsideTemperature < 50 || outsideTemperature > 75 ? 0.5 : 1 // lower swing when hot or cold outside
-    def coolswing = insideHum < 60 ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
+    def lo = celcius ? getCelcius(50) : 50
+    def hi = celcius ? getCelcius(75) : 75
+    def swing = outsideTemperature < lo  || outsideTemperature > hi ? 0.5 : 1 // lower swing when hot or cold outside
+    def loCoolSw = celcius ? getCelcius(60) : 60
+    def coolswing = insideHum < loCoolSw ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
 
     boolean needCool = !simpleModeContactClosed ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= desired + swing) : outsideTemperature >= outsideThres + 5 && inside >= desired + swing
@@ -2216,7 +2220,7 @@ def getAutoVal(){
 
     def outside = outsideTemp?.currentValue("temperature") 
     def need = outside >= getOutsideThershold() ? "cool" : "heat"
-    def result = 73 // just a temporary default value   
+    def result = celcius ? getCelcius(73):73 // just a temporary default value   
     //def humidity = outsideTemp?.currentValue("humidity") // outside humidity
     def humidity = getInsideHumidity() // in auto mode we evaluate based only on inside humidity
     humidity = humidity != null ? humidity : 50 // assume 50 as a temporary value to prevent errors when a has just been installed by user and humidity value has yet to be parsed
@@ -2242,10 +2246,14 @@ outside = $outside
         return 73
     }
 
-    def maxAH = maxAutoHeat != null ? maxAutoHeat : 75
-    def minAC = minAutoCool != null ? minAutoCool : 70
-    def minAH = minAutoHeat != null ? minAutoHeat : 70
-    def maxAC = maxAutoCool != null ? maxAutoCool : 77
+    def hiCool = celcius ? getCelcius(77) : 77
+    def loCool = celcius ? getCelcius(70) : 70
+    def hiHeat = celcius ? getCelcius(75) : 75
+    def loHeat = celcius ? getCelcius(70) : 70
+    def maxAH = maxAutoHeat != null ? maxAutoHeat : hiHeat
+    def minAC = minAutoCool != null ? minAutoCool : loCool
+    def minAH = minAutoHeat != null ? minAutoHeat : loHeat
+    def maxAC = maxAutoCool != null ? maxAutoCool : hiCool
 
     logging """
 maxAH = $maxAH
@@ -2354,7 +2362,7 @@ def getOutsideThershold(){
     // modulated with outside humidity 
 
     def humidity = outsideTemp?.currentValue("humidity") 
-    humidity = humidity != null ? humidity : 50 // prevents error from recently installed thermostats
+    humidity = humidity != null ? humidity : celcius ? getCelcius(50):50 // prevents error from recently installed thermostats
     if(humidity == null){
         def message = """$outsideTemp is not returning any humdity value - it may be because it was just included; if so, this will resolve ont its own.
 If this message still shows within an hour, check your thermostat configuration..."""
@@ -2365,13 +2373,15 @@ If this message still shows within an hour, check your thermostat configuration.
     // the higher the humidity, the lower the threshold so cooling can happen 
     def y = null // value to find
     def x = humidity 
-    def ya = 60 // coressponding outside temperature value for when humidity = xa 
-    def xa = 60 // humidity level
+    def ya = celcius ? getCelcius(60):60 // coressponding outside temperature value for when humidity = xa 
+    def xa = celcius ? getCelcius(60):60 // humidity level
     def m = -0.1 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
     //log.warn "y = $y"
-    def result = y > 68 ? 68 : (y < 60 ? 60 : y) // max and min
+    def lo = celcius ? getCelcius(68):68
+    def hi = celcius ? getCelcius(60):60
+    def result = y > hi ? hi : (y < lo ? lo : y) // max and min
 
     descriptionText "cool/heat decision result = ${y != result ? "$result (corrected from y=$y)" : "$result"} (humidity being ${humidity < 40 ? "low at ${humidity}%" : "high at ${humidity}%"})"
     return result
@@ -2380,7 +2390,7 @@ If this message still shows within an hour, check your thermostat configuration.
 }
 def getHumidityThreshold(){ // must be called only upon windows opening decision
     def humidity = outsideTemp?.currentValue("humidity") 
-    humidity = humidity != null ? humidity : 50
+    humidity = humidity != null ? humidity : celcius ? getCelcius(50):50
     def outsideTemperature = outsideTemp?.currentValue("temperature")
 
     // we want to set a humidity threshold depending on outside temperature
@@ -2389,8 +2399,8 @@ def getHumidityThreshold(){ // must be called only upon windows opening decision
 
     def y = null // value to find
     def x = outsideTemperature 
-    def ya = 70 // coressponding humidity threshold for when humidity = xa
-    def xa = 70
+    def ya = celcius ? getCelcius(70):70 // coressponding humidity threshold for when humidity = xa
+    def xa = celcius ? getCelcius(70):70
     def m = -3 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
@@ -2443,6 +2453,11 @@ unit = $unit
 """
 
     return "${Math.round(remain)} $unit"
+}
+def getCelcius(int value){
+    def C = (value - 32) * (5/9) 
+    logging "${value}F converted to ${C}C"
+    return C
 }
 /************************************************BOOLEANS******************************************************/
 boolean contactsAreOpen(){

@@ -262,11 +262,11 @@ In heating mode, the function will work with a different method to make sure to 
             input "sendAlert", "bool", title: "Send a sound and/or text notification when temperature goes below antifreeze safety", submitOnChange:true
             if(sendAlert)
             {
-                input "speech", "capability.speechSynthesis", title: "Select your speech device", multiple:true, required:false, submitOnChange: true 
-                input "speaker", "capability.audioNotification", title: "Select your speakers", multiple:true, required:false, submitOnChange: true 
-                if(speaker)
+                input "speech", "capability.speechSynthesis", title: "Select speech devices", multiple:true, required:false, submitOnChange: true 
+                input "musicDevice", "capability.musicPlayer", title: "Select music players", multiple:true, required:false, submitOnChange: true 
+                if(musicDevice || speech)
                 {
-                    input "volumeLevel", "number", title: "Set the volume level", range: "0..100",required:true, submitOnChange: true  
+                    input "volumeLevel", "number", title: "Set the volume level", range: "10..100",required:true, submitOnChange: true  
                 }
                 input "initializeDevices", "bool", title:"Try to fix unresponsive speakers (such as Chrome's)", defaultValue:false
                 input "notification", "capability.notification", title: "Select notification devices", multiple:true, required:false, submitOnChange: true 
@@ -436,7 +436,29 @@ def windowsManagement(){
                 input "windows", "capability.switch", title: "Turn on those switches when home needs to cool down, wheather permitting", multiple:true, required: false, submitOnChange: true
                 if(windows)
                 {
-                    input "windowsModes", "mode", title: "Select under which modes $windows can be operated", required:true, multiple:true
+                    if(windows.size() > 1)
+                    {
+                        input "onlySomeWindowsWillOpen", "bool", title:"Differentiate some windows behavior based on location mode", submitOnChange: true, defaultValue:false
+
+                        if(onlySomeWindowsWillOpen)
+                        {
+                            def list = []
+                            int i = 0
+                            int s = windows.size() 
+                            for(s!=0;i<s;i++)
+                            {
+                                list += windows[i].toString()
+                            }
+
+                            list = list.sort()
+                            log.debug "------------- list = $list"
+
+                            input "modeSpecificWindows", "mode", title:"select the modes under which you want only some specific windows to be operated", multiple:true, required:true
+                            input "onlyThoseWindows", "enum", title:"Select the windows for these modes", options:list, required:true
+                        }
+                    }
+
+                    input "windowsModes", "mode", title: "Select under which modes ALL WINDOWS can be operated", required:true, multiple:true
 
                     input "outsidetempwindowsH", "number", title: "Set a temperature below which it's ok to turn on $windows", required: true, submitOnChange: true
                     input "outsidetempwindowsL", "number", title: "Set a temperature below which it's NOT ok to turn on $windows", required: true, submitOnChange: true
@@ -724,7 +746,6 @@ def motionHandler(evt){
         descriptionText "$evt.device is $evt.value"
         mainloop()
     }
-
 }
 def temperatureHandler(evt){
     if(!atomicState.paused){
@@ -1183,6 +1204,7 @@ def mainloop(){
         }
         // antifreeze precaution (runs after calling atomicState.antifreeze on purpose here)
         def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature"): inside
+        
         if(antifreeze){
             def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : 67
 
@@ -1221,7 +1243,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                 thermostat.setThermostatMode("heat")
                 thermostat.setHeatingSetpoint(72)
                 atomicState.antifreeze = true
-                sendNotification()
+                //sendNotification()
             }
             else
             {
@@ -1496,15 +1518,15 @@ def sendNotification(){
 
     def dTime = 5*60*1000 // every 5 minutes
 
-    if(now() - atomicState.lastNotification >= dTime || 1==1)
+    if(now() - atomicState.lastNotification >= dTime)
     {
         atomicState.lastNotification = now()
 
-        def speakers = speaker ? buildDebugString(speaker) : ""
-        def speeches = speech ? buildDebugString(speech) : ""
+        def musicDeviceList = musicDevice ? buildDebugString(musicDevice) : ""  // build a list of the devices as string
+        def speechDeviceList = speech ? buildDebugString(speech) : ""
         def notifDevices = notification ? buildDebugString(notification) : ""
 
-        def notifLogs = "${notification && speaker && speech ? "to ${notifDevices}, ${speakers}, ${speeches}" : notification && speaker ? "to ${notifDevices}, ${speakers}" : notification && speech ? "to ${notifDevices}, ${speechesspeeches}" : speaker && speech ? "to ${speakers}, ${speeches}" : speaker ? "to ${speakers}" : speech ? "to ${speeches}" : ""}" 
+        def notifLogs = "${notification && speaker && speech ? "to ${notifDevices}, ${speakers}, ${speechDeviceList}" : notification && speaker ? "to ${notifDevices}, ${musicDeviceList}" : notification && speech ? "to ${notifDevices}, ${speechDeviceList}" : speaker && speech ? "to ${speakers}, ${speechDeviceList}" : speaker ? "to ${musicDeviceList}" : speech ? "to ${speechDeviceList}" : ""}" 
 
         def debugMessage = "message to be sent: '${message} ${notifLogs}" 
 
@@ -1518,28 +1540,43 @@ def sendNotification(){
         {
             log.info "User did not select any text notification device"
         }
-        if(speaker || speech)
+        if(musicDevice || speech)
         {
-            if(speaker)
+            if(musicDevice)
             {
                 if(initializeDevices)
                 {
                     int i = 0
-                    int s = speaker.size()
-                    def device 
+                    int s = musicDevice.size()
+                    def device = []
                     for(s!=0;i!=s;i++)
                     {
-                        device = speaker[i]
+                        device = musicDevice[i]                        
                         if(device.hasCommand("initialize"))
                         {
-                            log.debug "Initializing $device (speaker)"
+                            logging "Initializing $device (musicDevice)"
                             device.initialize()
-                            log.debug "wainting for 1 second"
+                            logging "waiting for 1 second"
                             pauseExecution(1000)
                         }
                     }
                 }
-                speaker.playTextAndRestore(message, volumeLevel.toInteger())
+
+                int i = 0
+                int s = musicDevice.size()
+                def level
+                for(s!=0;i!=s;i++)
+                {
+                    log.debug "Sending message to $device"
+                    device = musicDevice[i] 
+                    level = device.currentValue("level") // record value for later restore   
+                    log.debug "$device volume level is $level"
+                    device.setLevel(volumeLevel.toInteger()) // set desired level // for some reason this doesn't work
+                    pauseExecution(500)// give it time to go through
+                    device.playText(message) // send the message to play
+                    device.setLevel(level.toInteger()) // restore previous level value
+                }
+                return
             }
             if(speech)
             {
@@ -1560,7 +1597,8 @@ def sendNotification(){
                         }
                     }
                 }
-                speech.speak(message)    
+                def volume = volumeLevel ? volumeLevel : 70
+                speech.speak(message, volume)    
             }
         }
     }
@@ -1702,7 +1740,8 @@ def windowsManagement(desired, simpleModeContactClosed, inside, outsideTemperatu
         lastClosingTime = lastClosingTime.round(2)
         boolean closedSinceLong = lastClosingTime > 10.0 && someAreClosed // been open for more than 30 minutes
 
-        boolean tooColdInside = inside <= desired - 4
+        boolean tooColdInside = inside <= desired - 4 //&& outside 
+        //log.warn "tooColdInside = $tooColdInside : inside = $inside && desired = $desired"
         //closing error management for safety, if cmd didn't go through for whatever reason and temp went too low, force close the windows
         boolean exception = someAreOpen && ((atomicState.closedByApp && now() - lastClosingTime > 30 && tooColdInside) || (!outsideWithinRange && tooColdInside))
         long elapsed = now() - lastClosingTime
@@ -1804,8 +1843,29 @@ needToClose = $needToClose
                     }
                     if(atomicState.closedByApp || (openMore && atomicState.openByApp))
                     {
-                        def message = "opening $windows"
-                        windows.on()
+                        def message = ""
+                        if(onlySomeWindowsWillOpen && location.mode in modeSpecificWindows)
+                        {
+                            message = "opening $onlyThoseWindows ONLY"
+                            def objectDevice
+                            int i = 0
+                            int s = windows.size() 
+                            for(s!=0;i<s;i++)
+                            {
+                                if("${windows[i]}" in onlyThoseWindows)
+                                {
+                                    windows[i].on()
+                                    //log.debug "${windows[i]} is the right device"
+                                }
+                            }
+                            descriptionText message
+                        }
+                        else {
+                            message = "opening $windows"
+                            descriptionText message
+                            windows.on()
+                        }
+
                         if(doorsManagement && doorContactsAreOpen)
                         {
                             atomicState.otherWindowsOpenByApp = true
@@ -1929,6 +1989,40 @@ def getDesired(simpleModeActive){
     {
         desired = dimmer?.currentValue("level")
     }
+
+    // safety checkup for when alexa misinterpret a command to a light dimmer and applies it to the dimmer used by this app
+    def maxHi = celcius ? getCelcius(88) : 88 // assuming no one would be stupid enough to set their thermostat to 88, if so it's interpreted as a problem by the app
+    def minLow = celcius ? getCelcius(30) : 30 // same, but when setpoint is too low
+    boolean problem = desired >= maxHi & lastNeed == "heat" ? true : desired <= minLow & lastNeed == "cool" ? true : false
+    def lastNeed = atomicState.lastNeed
+    logging """
+maxAutoHeat = $maxAutoHeat
+minAutoCool = $minAutoCool
+maxHi = $maxHi
+minLow = $minLow
+dimmer value = ${dimmer?.currentValue("level")}
+heatingSetpoint = ${thermostat.currentValue("heatingSetpoint")}
+coolingSetpoint = ${thermostat.currentValue("coolingSetpoint")}
+boolean problem = $desired >= $maxHi ? ${desired >= maxHi} : $desired <= $minLow ? ${desired <= minLow} : false
+atomicState.lastNeed = $atomicState.lastNeed
+problem detected : $problem
+"""
+
+    if(problem)
+    {
+        log.warn "There's a problem with current desired temperature ($desired). Readjusting from $thermostat setpoints"
+        desired = thermostat.currentValue("thermostatSetpoint")
+        // fix the dimmer's value if any dimmer
+        dimmer?.setLevel(desired)
+        log.warn "************ $app.name successfuly fixed its desired temperature data point! ********" 
+    }
+    problem = desired >= maxHi & lastNeed == "heat" ? true : desired <= minLow && lastNeed == "cool" ? true : false
+    if(problem)
+    {
+        log.warn "${thermostat}'s values are as inconsistent as ${dimmer ? "${dimmer}'s" : "the previous'"}, meaning data retrieval failed. Applying safe values instead until next user's input"
+        desired = celcius ? getCelcius(72) : 72 // safe value
+    }
+
     if(simpleModeActive)
     {
         if(doorsContactsAreOpen() && overrideSimpleMode)
@@ -1949,6 +2043,8 @@ def getDesired(simpleModeActive){
         }
     } 
     descriptionText "desired temperature is: $desired and current temperature is ${inside}"
+
+
     return desired
 }
 def getInsideHumidity(){
@@ -2456,7 +2552,7 @@ unit = $unit
 }
 def getCelcius(int value){
     def C = (value - 32) * (5/9) 
-    logging "${value}F converted to ${C}C"
+    descriptionText "${value}F converted to ${C}C"
     return C
 }
 /************************************************BOOLEANS******************************************************/

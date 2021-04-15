@@ -123,8 +123,8 @@ def thermostats(){
             input "forceCmd", "bool", title:"Force commands (for old non-Zwave-plus devices that don't refresh their status properly under certain mesh conditions)", defaultValue:false
             input "pw", "capability.powerMeter", title:"verify status with a power meter", required:false
             input "heatpump", "bool", title: "$thermostat is a heat pump", submitOnChange:true
-            def mssg = "Because $thermostat is a heatpump, you must select an alternate heater controlled by a switch (see further down)."
-            paragraph formatText (mssg, "blue", "white")
+            def mssg = "Because $thermostat is a heatpump, you must select an alternate heater controlled by a switch (see further down). This is due to the fact that a heatpump will not be power efficient under certain weather conditions and temperatures. ${app.label} will make sure the best device is being used when needed"
+            if(heatpump){paragraph formatText (mssg, "blue", "white")}
             if(restricted)
             {
                 input "restrictedThermMode", "enum", title:"Select default's thermostat operation once your location is in restricted mode", options:["off", "cool", "heat", "auto"], required:false, defaultValue: "off", submitOnChange:true
@@ -1168,7 +1168,7 @@ otherWindows?.off()
 
 /************************************************MAIN functions*************************************************/
 def mainloop(){
-
+ 
     if(!atomicState.paused)
     {
 

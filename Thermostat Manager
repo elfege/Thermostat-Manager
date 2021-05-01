@@ -8,15 +8,15 @@ definition(
     description: "A Trully Smart Thermostat Manager That Can Save You Tons Of Money",
 
     category: "Green Living",
-    iconUrl: "https://www.philonyc.com/assets/penrose.jpg",
-    iconX2Url: "https://www.philonyc.com/assets/penrose.jpg",
-    iconX3Url: "https://www.philonyc.com/assets/penrose.jpg", 
-    image: "https://www.philonyc.com/assets/penrose.jpg"
+    iconUrl: "https://www.elfege.com/penrose.jpg",
+    iconX2Url: "https://www.elfege.com/penrose.jpg",
+    iconX3Url: "https://www.elfege.com/penrose.jpg", 
+    image: "https://www.elfege.com/penrose.jpg"
 )
 /************************************************SETTINGS*************************************************/
 preferences {
 
-    page name: "settings"
+    page name: "MainPage"
     page name: "thermostats"
     page name: "methods"
     page name: "contactsensors"
@@ -25,13 +25,13 @@ preferences {
     page name: "windowsManagement"
 
 }
-def settings() {
+def MainPage() {
 
     pageNameUpdate()   
 
     def pageProperties = [
-        name:       "settings",
-        title:      "settings",
+        name:       "MainPage",
+        title:      "${app.label}",
         nextPage:   null,
         install: true,
         uninstall: true
@@ -40,7 +40,10 @@ def settings() {
     dynamicPage(pageProperties) {
 
         section() {
-            label title: "Assign a name", required: false
+            
+            //label title: "Assign a name",description:"$atomicState.appLabel", required: false, submitOnChange:true // can't use this because it shows html font tags
+            input "appLabel", "text", title: "Assign a name to this instance of $app.name", submitOnChange:true
+            app.updateLabel(appLabel)
             input "celcius", "bool", title: "Celcius"
         }
         section()
@@ -99,7 +102,7 @@ def thermostats(){
     def pageProperties = [
         name:       "thermostats",
         title:      title,
-        nextPage:   "settings",
+        nextPage:   "MainPage",
         install: false,
         uninstall: false
     ]
@@ -116,12 +119,12 @@ def thermostats(){
             {
                 paragraph formatText("""Your thermostat doesn't support humidity measurement (or doesn't return any humidity value). As a consequence, you must select a separate humidity sensor""", "white", "blue")
             }
-            if(thermostat && !hasHumidity)
+            if(thermostat || !hasHumidity)
             {
-                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "Select a humidity sensor", required:false, submitOnChange:true
+                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "optional: select a humidity sensor", required:false, submitOnChange:true
             }
             input "forceCmd", "bool", title:"Force commands (for old non-Zwave-plus devices that don't refresh their status properly under certain mesh conditions)", defaultValue:false
-            input "pw", "capability.powerMeter", title:"verify status with a power meter", required:false
+            input "pw", "capability.powerMeter", title:"optional: verify my thermostat's consistent operation with a power meter", required:false
             input "heatpump", "bool", title: "$thermostat is a heat pump", submitOnChange:true
             def mssg = "Because $thermostat is a heatpump, you must select an alternate heater controlled by a switch (see further down). This is due to the fact that a heatpump will not be power efficient under certain weather conditions and temperatures. ${app.label} will make sure the best device is being used when needed"
             if(heatpump){paragraph formatText (mssg, "blue", "white")}
@@ -210,7 +213,7 @@ def methods(){
     def pageProperties = [
         name:       "methods",
         title:      title,
-        nextPage:   "settings",
+        nextPage:   "MainPage",
         install: false,
         uninstall: false
     ]
@@ -281,7 +284,7 @@ def contactsensors(){
     def pageProperties = [
         name:       "contactsensors",
         title:      title,
-        nextPage:   "settings",
+        nextPage:   "MainPage",
         install: false,
         uninstall: false
     ]
@@ -312,7 +315,7 @@ def contactsensors(){
                     }
                     if(UseSimpleMode)
                     {
-                        input "overrideSimpleMode", "bool", title: "This option overrides ${simpleModeContact && simpleModeButton ? "$simpleModeContact && $simpleModeButton" : simpleModeButton ? "$simpleModeButton" : "$simpleModeContact" }'s events"
+                        input "overrideSimpleMode", "bool", title: "$doorsContacts events override simple mode (until they're closed again)"
 
                     }
                     if(doorsContacts)
@@ -335,7 +338,7 @@ def powersaving(){
     def pageProperties = [
         name:       "powersaving",
         title:      title,
-        nextPage:   "settings",
+        nextPage:   "MainPage",
         install: false,
         uninstall: false
     ]
@@ -370,7 +373,7 @@ def comfortSettings(){
     def pageProperties = [
         name:       "comfortSettings",
         title:      title,
-        nextPage:   "settings",
+        nextPage:   "MainPage",
         install: false,
         uninstall: false
     ]
@@ -386,6 +389,7 @@ def comfortSettings(){
                 def i = 0
                 input "simpleModeButton", "capability.holdableButton", title: "When ${!simpleModeButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} pushed, work in limited mode (hold or push again to cancel)", multiple: true, required: false, submitOnChange:true
                 input "simpleModeTimeLimit", "number", title: "Optional: return to normal operation after a certain amount of time", descripition: "Time in hours", submitOnChange:true
+                input "allowWindows", "bool", title:"Allow windows management, if any", defaultValue:false
                 if(simpleModeButton)
                 {
                     for(s!=0;i<s;i++){
@@ -423,7 +427,7 @@ def windowsManagement(){
     def pageProperties = [
         name:       "windowsManagement",
         title:      title,
-        nextPage:   "settings",
+        nextPage:   "MainPage",
         install: false,
         uninstall: false
     ]
@@ -451,7 +455,7 @@ def windowsManagement(){
                             }
 
                             list = list.sort()
-                            log.debug "------------- list = $list"
+                            //log.debug "------------- list = $list"
 
                             input "modeSpecificWindows", "mode", title:"select the modes under which you want only some specific windows to be operated", multiple:true, required:true
                             input "onlyThoseWindows", "enum", title:"Select the windows for these modes", options:list, required:true
@@ -473,10 +477,29 @@ def windowsManagement(){
                             if(windowsDuration)
                             {
                                 paragraph "<div style=\"width:102%;background-color:#1C2BB7;color:red;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">${app.name} will determine duration based on this value and outside temperature. The cooler it is outside, the shorter the duration (the closer the duration will be to the minimum you set here). Recommended value: 10 seconds</div>"
-                            }
-                            input "maxDuration", "number", title: "Set maximum operation time", description: "time in seconds", required: false, submitOnChange:true
 
-                            input "customCommand", "text", title: "custom command to stop operation (default is 'off()')", required: false, submitOnChange:true
+
+                                input "differentDuration", "bool", title: "Differentiate operation time", defaultValue:false, submitOnChange:true
+                                if(!differentDuration)
+                                {
+                                    input "maxDuration", "number", title: "Set maximum operation time", description: "time in seconds", required: false, submitOnChange:true
+                                    input "customCommand", "text", title: "custom command to stop operation (default is 'off()')", required: false, submitOnChange:true
+                                }
+                                else
+                                {
+                                    def list = []
+                                    int i = 0
+                                    int s = windows.size() 
+                                    def device
+                                    for(s!=0;i<s;i++)
+                                    {
+                                        device = windows[i]
+                                        input "windowsDuration${i}", "number", title: "Set minimum operation time for $device", description: "time in seconds", required: false, submitOnChange:true
+                                        input "maxDuration${i}", "number", title: "Set maximum operation time $device", description: "time in seconds", required: false, submitOnChange:true
+
+                                    }
+                                }
+                            }
 
                             if(customCommand)
                             {
@@ -515,30 +538,49 @@ with another thermostat's when some door contacts are open. Do you want to also 
     }
 }
 def pageNameUpdate(){
+    
+    def pauseVar = "paused"
+    def previousLabel = app.label // save current label
     if(atomicState.paused)
     {
-        log.debug "new app label: ${app.label}"
-        while(app.label.contains(" (Paused) "))
+        while(app.label.contains(" $pauseVar "))
         {
-            app.updateLabel(app.label.minus("(Paused)" ))
+            app.updateLabel(app.label.minus(" $pauseVar "))
         }
-        app.updateLabel(app.label + ("<font color = 'red'> (Paused) </font>" ))
-    }
-    else if(app.label.contains("(Paused)"))
-    {
-        app.updateLabel(app.label.minus("<font color = 'red'> (Paused) </font>" ))
-        while(app.label.contains(" (Paused) ")){app.updateLabel(app.label.minus("(Paused)" ))}
-        log.debug "new app label: ${app.label}"
-    }
-    if(atomicState.paused == true)
-    {
+
+        log.debug "original label = $app.label"            
+
+        app.updateLabel(previousLabel + ("<font color = 'red'> $pauseVar </font>" )) // recreate label
+
         atomicState.button_name = "resume"
-        logging "button name is: $atomicState.button_name"
+        log.debug "button name is: $atomicState.button_name new app label: ${app.label}"
     }
     else 
     {
         atomicState.button_name = "pause"
         logging "button name is: $atomicState.button_name"
+    }
+    if(app.label.contains(pauseVar) && !atomicState.paused)
+    {
+        app.updateLabel(app.label.minus("<font color = 'red'> $pauseVar </font>" ))
+        while(app.label.contains(" $pauseVar "))
+        {
+            app.updateLabel(app.label.minus(" $pauseVar "))
+        }
+        log.debug "new app label: ${app.label}"
+    }
+
+    // when page is loaded and app is paused make sure page loading doesn't add "paused" several times
+    if(app.label.contains(pauseVar) && atomicState.paused)
+    {
+        //app.updateLabel(app.label.minus("<font color = 'red'> $pauseVar </font>" ))
+        while(app.label.contains(" $pauseVar "))
+        {
+            app.updateLabel(app.label.minus(" $pauseVar "))
+            app.updateLabel(app.label.minus("<font color = 'red'>"))
+            app.updateLabel(app.label.minus("</font>"))
+        }
+        app.updateLabel(app.label + ("<font color = 'red'> $pauseVar </font>" )) // recreate label
     }
 }
 
@@ -699,7 +741,8 @@ def appButtonHandler(btn) {
 
     switch(btn) {
         case "pause":atomicState.paused = !atomicState.paused
-        logging("atomicState.paused = $atomicState.paused")
+        log.warn "atomicState.paused = $atomicState.paused"
+        
         if(atomicState.paused)
         {
             log.debug "unsuscribing from events..."
@@ -1168,7 +1211,7 @@ otherWindows?.off()
 
 /************************************************MAIN functions*************************************************/
 def mainloop(){
- 
+
     if(!atomicState.paused)
     {
 
@@ -1204,7 +1247,7 @@ def mainloop(){
         }
         // antifreeze precaution (runs after calling atomicState.antifreeze on purpose here)
         def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature"): inside
-        
+
         if(antifreeze){
             def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : 67
 
@@ -1390,14 +1433,14 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
                                 def temporarySetpoint = desired - 1
                                 thermostat.setCoolingSetpoint(temporarySetpoint) 
                                 log.warn "CHANGING COOLING SETPOINT TO $desired - 1 = ${temporarySetpoint} due to operation discrepancy"
-                                atomicState.setpointSentByApp = true // prevent this from modifying the dimmer's and the desired value
+                                atomicState.setpointSentByApp = true // prevent this from modifying dimmer's and desired values
                             }
                             else if(need == "heat")
                             {    
                                 def temporarySetpoint = desired + 1
                                 thermostat.setHeatingSetpoint(temporarySetpoint)
                                 log.warn "CHANGING HEATING SETPOINT TO $desired + 1 = ${temporarySetpoint} due to operation discrepancy"
-                                atomicState.setpointSentByApp = true // prevent this from modifying the dimmer's and the desired value
+                                atomicState.setpointSentByApp = true // prevent this from modifying dimmer's and desired values
                             }
                             toggleRelatedSwitch("on")
                         }
@@ -1407,7 +1450,7 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}
 
                         if(need in ["cool", "heat"])
                         {
-                            atomicState.lastSetTime = now() // prevent switching from heat to cool too frequently
+                            atomicState.lastSetTime = now() // prevent switching from heat to cool too frequently during shoulder season
                         }
 
                         logging("THERMOSTAT SET TO $need mode (587gf)")
@@ -1704,9 +1747,9 @@ outsideTemperature = $outsideTemperature
         }
     }
 }
-def windowsManagement(desired, simpleModeContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh){
+def windowsControl(desired, simpleModeActive, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh){
 
-    if(controlWindows && windows && !simpleModeContactClosed && !atomicState.override)
+    if(controlWindows && windows && !simpleModeActive && !atomicState.override)
     {
         def humThres = getHumidityThreshold() // linear equation: hum thres varies with outside temp
         boolean tooHumid = humidity >= 90 ? true : humidity >= humThres 
@@ -1752,10 +1795,10 @@ def windowsManagement(desired, simpleModeContactClosed, inside, outsideTemperatu
 
         //(inside > desired + (swing * 2) && openSinceLong) -> give it a chance to cool down the place
         boolean enoughTimeBetweenOpenAndClose = ((now() - atomicState.lastOpeningTime) / 1000 / 60) > 10.0 || inside < desired - swing //-> give it a chance to cool down the place
-        boolean enoughTimeBetweenCloseAndOpen = ((now() - atomicState.lastClosingTime) / 1000 / 60) > 60.0 //-> don't reopen too soon after closing
-
-        boolean needToClose = (enoughTimeBetweenOpenAndClose && ((inside > desired + (swing * 3) && openSinceLong) || inside < desired - swing || insideTempIsHopeLess)) || !outsideWithinRange
-        boolean needToOpen = (enoughTimeBetweenCloseAndOpen && (inside > desired + swing && !needToClose)) && outsideWithinRange //|| amplitudeTooHigh) // timer ok, too hot inside + within range (acounting for humidity) and no discrepency
+        boolean enoughTimeBetweenCloseAndOpen = ((now() - atomicState.lastClosingTime) / 1000 / 60) > 10.0 //-> don't reopen too soon after closing
+        boolean outsideSubstantiallyLowEnough = outside < 71 // allows for more frequent window operation when outside temp might be low enough to cool the room fast
+        boolean needToClose = (enoughTimeBetweenOpenAndClose  && ((inside > desired + (swing * 3) && openSinceLong) || inside < desired - swing || insideTempIsHopeLess)) || !outsideWithinRange
+        boolean needToOpen = ((enoughTimeBetweenCloseAndOpen || outsideSubstantiallyLowEnough) && (inside > desired + swing && !needToClose)) && outsideWithinRange //|| amplitudeTooHigh) // timer ok, too hot inside + within range (acounting for humidity) and no discrepency
 
         //if need = cool while it's clearly cold outside, rather open windows than use AC
         boolean needToOpenForcedToTrue = false
@@ -1779,9 +1822,9 @@ ${!needToOpen && needCool && outsideTemperature <= desired - 4 && enoughTimeBetw
         logging """<div style=\"width:102%;background-color:green;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
 **********************WINDOWS************************
 inWindowsModes = $inWindowsModes
-$windows ${!contactCapable ? "${(windows.size() > 1) ? "have":"has"} contact capability" : "${(windows.size() > 1) ? "don't have":"doesn't have"} contact capability"}
-closed: ${windows.findAll{it?.currentValue("contact") == "closed"}}
-Open: ${windows.findAll{it?.currentValue("contact") == "open"}}
+${windows.join(",")} ${contactCapable ? "${(windows.size() > 1) ? "have":"has"} contact capability" : "${(windows.size() > 1) ? "don't have":"doesn't have"} contact capability"}
+closed: ${windows.findAll{it?.currentValue("contact") == "closed"}.join(",")}
+Open: ${windows.findAll{it?.currentValue("contact") == "open"}}.join(",")}
 atomicState.openByApp = $atomicState.openByApp
 atomicState.closedByApp = $atomicState.closedByApp
 withinRange (stritcly): $withinRange
@@ -1805,6 +1848,7 @@ inside > desired + swing : ${inside > desired + swing}
 inside < desired - swing       : ${inside < desired - swing}
 enoughTimeBetweenOpenAndClose : $enoughTimeBetweenOpenAndClose
 enoughTimeBetweenCloseAndOpen : $enoughTimeBetweenCloseAndOpen
+outsideSubstantiallyLowEnough = $outsideSubstantiallyLowEnough // allows to bypass enoughTimeBetweenCloseAndOpen 
 lastOpeningTime = $lastOpeningTime minutes ago ${outsideTempHasDecreased ? "value was reset to 0 because outsideTempHasDecreased = true (outsideTempHasDecreased = $outsideTempHasDecreased" : ""}
 lastClosingTime = $lastClosingTime minutes ago
 openSinceLong = $openSinceLong
@@ -1829,7 +1873,7 @@ needToClose = $needToClose
 
         if(inWindowsModes || exception){
 
-            def time = getWindowsTimeOfOperation(outsideTemperature)
+            def time = getWindowsTimeOfOperation(outsideTemperature, maxDuration, windowsDuration)
 
             if(needToOpen) // outsideWithinRange and humidity level are accounted for in needToOpen boolean, unless in power saving mode
             {
@@ -1886,10 +1930,32 @@ needToClose = $needToClose
 
                         if(operationTime && !openMore && !INpwSavingMode) // if openMore or INpwSavingMode ignore stop() and open in full
                         {
-                            runIn(time, stop)
-                            message += " for a duration of $time seconds"
+                            if(!differentDuration)
+                            {
+                                runIn(time, stop)
+                                message += " for a duration of $time seconds"
+                            }
+                            else // apply diffent durations per device
+                            {
+
+                                int i = 0
+                                int s = windows.size()
+                                def device = null
+                                def max = 0
+                                def min = 0
+                                for(s!=0;i<s;i++)
+                                {
+                                    max = settings.find{it.key == "maxDuration${i.toString()}"}?.value.toInteger()
+                                    min = settings.find{it.key == "windowsDuration${i.toString()}"}?.value.toInteger()
+                                    log.warn "found : $device with max = $max min = $min"
+
+                                    time = getWindowsTimeOfOperation(outsideTemperature, max, min)
+                                    runIn(time, stop)
+
+                                }
+                            }
                         }
-                        log.warn message
+                        //log.warn message
 
                     }
                     else
@@ -1964,7 +2030,7 @@ needToClose = $needToClose
     else if(!windows) {
         logging "user did not select any window switch"
     }
-    else if(simpleModeContactClosed)
+    else if(simpleModeActive)
     {
         descriptionText "skipping windows management due to simple mode trigger mode"
     }
@@ -2076,14 +2142,15 @@ def getInsideHumidity(){
         }
     }
     descriptionText "Inside humidity is ${result}%"
+    return result
 }
-def getNeed(desired, simpleModeContactClosed, inside){
+def getNeed(desired, simpleModeActive, inside){
 
     def humidity = outsideTemp?.currentValue("humidity") 
     def insideHum = getInsideHumidity() // backup for windows and value used for negative swing variation when cooling   
     humidity = humidity != null ? humidity : (insideHum != null ? insideHum : 50)
     boolean doorContactsAreOpen = doorsContactsAreOpen()
-    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !simpleModeContactClosed && (!doorContactsAreOpen && doorsOverrideMotion)
+    boolean INpwSavingMode = powersavingmode && location.mode in powersavingmode && !simpleModeActive && (!doorContactsAreOpen && doorsOverrideMotion)
     boolean inWindowsModes = windows && location.mode in windowsModes
     boolean contactClosed = !contactsAreOpen()  
 
@@ -2101,24 +2168,24 @@ def getNeed(desired, simpleModeContactClosed, inside){
     def coolswing = insideHum < loCoolSw ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
 
-    boolean needCool = !simpleModeContactClosed ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= desired + swing) : outsideTemperature >= outsideThres + 5 && inside >= desired + swing
+    boolean needCool = !simpleModeActive ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= desired + swing) : outsideTemperature >= outsideThres + 5 && inside >= desired + swing
 
     logging"""
 outsideTemperature >= outsideThres + 5 = ${outsideTemperature >= outsideThres + 5}
 outsideTemperature = $outsideTemperature
 outsideThres + 5 = ${outsideThres + 5}
 needCool = $needCool
-simpleModeContactClosed = $simpleModeContactClosed
+simpleModeActive = $simpleModeActive
 
 """
-    boolean needHeat = !simpleModeContactClosed ? (outsideTemperature < outsideThres /* makes heat run during summer... || amplitudeTooHigh*/) && inside <= desired - swing : inside <= desired - swing && outsideTemperature < outsideThres
+    boolean needHeat = !simpleModeActive ? (outsideTemperature < outsideThres /* makes heat run during summer... || amplitudeTooHigh*/) && inside <= desired - swing : inside <= desired - swing && outsideTemperature < outsideThres
 
     //log.warn "inside = $inside inside >= desired + swing : ${inside >= desired + swing} |||needCool=$needCool"
 
-    boolean motionActive = Active() || simpleModeContactClosed
+    boolean motionActive = Active() || simpleModeActive
 
     // shoulder season management: simple mode trigger forces ac to run despite cold outside if it gets too hot inside
-    boolean norHeatNorCool = !needCool && !needHeat && inside > desired + swing && simpleModeContactClosed && outsideTemperature >= 55 ? true : false
+    boolean norHeatNorCool = !needCool && !needHeat && inside > desired + swing && simpleModeActive && outsideTemperature >= 55 ? true : false
     // the other room could be in an inadequate mode, which would be noticed by an undesirable temperature amplitude
     boolean unacceptable = doorContactsAreOpen && !atomicState.override && (inside < desired - 2 || inside > desired + 2) // if it gets too cold or too hot, ignore doorsManagement
     logging """inside = $inside 
@@ -2246,20 +2313,20 @@ inside > criticalcold :  ${inside > criticalcold}
 
     }
 
-    windowsManagement(desired, simpleModeContactClosed, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh)
+    windowsControl(desired, simpleModeActive, inside, outsideTemperature, humidity, swing, needCool, inWindowsModes, amplitudeTooHigh)
 
     logging"""
-simpleModeContactClosed = $simpleModeContactClosed
+simpleModeActive = $simpleModeActive
 doorContactsAreOpen = $doorContactsAreOpen
 !overrideSimpleMode = ${!overrideSimpleMode}
 simpleModeIsActive() = ${simpleModeIsActive()}
 """
 
-    if(UseSimpleMode && ((simpleModeContactClosed && !doorContactsAreOpen) || (!doorContactsAreOpen && !overrideSimpleMode && simpleModeContactClosed)))
+    if(UseSimpleMode && ((simpleModeActive && !doorContactsAreOpen) || (!doorContactsAreOpen && !overrideSimpleMode && simpleModeActive)))
     {
         log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Enabled</div>"
     }
-    else if(UseSimpleMode && simpleModeContactClosed && overrideSimpleMode && doorsOpen)
+    else if(UseSimpleMode && simpleModeActive && overrideSimpleMode && doorsOpen)
     {
         log.info "<div style=\"width:102%;background-color:grey;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">Simple Mode Called but NOT active due to doors being open</div>"
     }
@@ -2293,7 +2360,7 @@ inside > coolswing = ${inside > coolswing}
 inside > desired = ${inside > desired}
 inside < desired = ${inside < desired}
 
-simpleModeContactClosed = $simpleModeContactClosed (simpleModeTriggerType = $simpleModeTriggerType)
+simpleModeActive = $simpleModeActive (simpleModeTriggerType = $simpleModeTriggerType)
 contactClosed = $contactClosed (open = $atomicState.listOfOpenContacts)
 outsideThres = $outsideThres
 outsideTemperature > desired = ${outsideTemperature > desired}
@@ -2397,13 +2464,11 @@ y instanceof String ? ${y instanceof String}
     return y.toInteger()
 
 }
-def getWindowsTimeOfOperation(outsideTemperature){
-
-    def max = maxDuration ? maxDuration : 2000
+def getWindowsTimeOfOperation(outsideTemperature, max, min){
 
     def y = null // value to find
     def x = outsideTemperature // current temperature outside
-    def ya = windowsDuration ? windowsDuration : 10 // minimal duration // coressponding duration for when outside temperature = xa
+    def ya = min // minimal duration // coressponding duration for when outside temperature = xa
     def xa = outsidetempwindowsL // minimal operation temperature
     def m = 0.9 // slope / coef
 
@@ -2462,13 +2527,13 @@ def getOutsideThershold(){
     if(humidity == null){
         def message = """$outsideTemp is not returning any humdity value - it may be because it was just included; if so, this will resolve ont its own.
 If this message still shows within an hour, check your thermostat configuration..."""
-        log.warn """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">$message</div>"""
+        formatText(message, red, white)
     }
     def outsideTemperature = outsideTemp?.currentValue("temperature")
 
     // the higher the humidity, the lower the threshold so cooling can happen 
     def y = null // value to find
-    def x = humidity 
+    def x = humidity ? humidity : 50 // 50 if no data returned to allow the app to run
     def ya = celcius ? getCelcius(60):60 // coressponding outside temperature value for when humidity = xa 
     def xa = celcius ? getCelcius(60):60 // humidity level
     def m = -0.1 // slope / coef
@@ -2481,7 +2546,6 @@ If this message still shows within an hour, check your thermostat configuration.
 
     descriptionText "cool/heat decision result = ${y != result ? "$result (corrected from y=$y)" : "$result"} (humidity being ${humidity < 40 ? "low at ${humidity}%" : "high at ${humidity}%"})"
     return result
-
 
 }
 def getHumidityThreshold(){ // must be called only upon windows opening decision
@@ -2517,7 +2581,7 @@ def getLastMotionEvents(Dtime, testType){
         logging "Collected ${thisDeviceEvents.size()} evts for $device"
         events += thisDeviceEvents.size() 
     }
-    descriptionText "$events active events in the last ${noMotionTime} minutes ($testType)"
+    descriptionText "$events active events in the last ${Dtime/1000/60} minutes ($testType)"
     return events
 }
 def getRemainTime(timeLimit, timeStamp){
@@ -2567,14 +2631,7 @@ boolean contactsAreOpen(){
         listOpen = WindowsContact?.findAll{it?.currentValue("contact") == "open"}     
         atomicState.listOfOpenContacts = "$listOpen"
         def messageText = "${listOpen.size() > 0 ? "Some contacts are open : $atomicState.listOfOpenContacts" : "all contacts closed"}"
-        if(listOpen.size() > 0)
-        {
-            log.warn messageText
-        }
-        else 
-        {
-            logging messageText
-        }
+
         Open = listOpen.size() > 0 && now() - atomicState.lastOpenEvt > deltaTime * 1000
     }
     else
@@ -2648,7 +2705,7 @@ boolean Active(){
             logging("motion returns true because outside of motion modes")
         }
         Dtime = 60 * 60 * 1000 
-        if(getLastMotionEvents(Dtime, "overrideTest")) // if no motion for over one hour then save power by resetting windows override
+        if(getLastMotionEvents(Dtime, "windows overrideTest")) // if no motion for over one hour then save power by resetting windows override
         {
             //atomicState.openByApp = true
             atomicState.closedByApp = true

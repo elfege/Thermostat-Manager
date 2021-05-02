@@ -1792,32 +1792,21 @@ def windowsControl(desired, simpleModeActive, inside, outsideTemperature, humidi
         def elapsedminutes = elapsed/1000/60
         if(exception) {log.warn "$windows still open! EMERGENCY CLOSING WILL BE ATTEMPTED"}
 
-
-        //(inside > desired + (swing * 2) && openSinceLong) -> give it a chance to cool down the place
+        // allow for more frequent window operation when outside temp might be low enough to cool the room fast
+        boolean outsideSubstantiallyLowEnough = outside < 71 && outside > outsidetempwindowsL
+        float timeBtwWinOp = outsideSubstantiallyLowEnough ? 5.0 : 30// 5 min if it's cool enough outside, otherwise, give it 30 min before reopening
+        
         boolean enoughTimeBetweenOpenAndClose = ((now() - atomicState.lastOpeningTime) / 1000 / 60) > 10.0 || inside < desired - swing //-> give it a chance to cool down the place
-        boolean enoughTimeBetweenCloseAndOpen = ((now() - atomicState.lastClosingTime) / 1000 / 60) > 10.0 //-> don't reopen too soon after closing
-        boolean outsideSubstantiallyLowEnough = outside < 71 // allows for more frequent window operation when outside temp might be low enough to cool the room fast
+        boolean enoughTimeBetweenCloseAndOpen = ((now() - atomicState.lastClosingTime) / 1000 / 60) > timeBtwWinOp //-> don't reopen too soon after closing
+              
         boolean needToClose = (enoughTimeBetweenOpenAndClose  && ((inside > desired + (swing * 3) && openSinceLong) || inside < desired - swing || insideTempIsHopeLess)) || !outsideWithinRange
-        boolean needToOpen = ((enoughTimeBetweenCloseAndOpen || outsideSubstantiallyLowEnough) && (inside > desired + swing && !needToClose)) && outsideWithinRange //|| amplitudeTooHigh) // timer ok, too hot inside + within range (acounting for humidity) and no discrepency
+        boolean needToOpen = (enoughTimeBetweenCloseAndOpen && (inside > desired + swing && !needToClose)) && outsideWithinRange //|| amplitudeTooHigh) // timer ok, too hot inside + within range (acounting for humidity) and no discrepency
 
-        //if need = cool while it's clearly cold outside, rather open windows than use AC
-        boolean needToOpenForcedToTrue = false
-        //needToOpen = !needToOpen && !tooHumid && needCool && outsideTemperature <= desired - 4 && enoughTimeBetweenCloseAndOpen ? true : needToOpen
-        //needToOpenForcedToTrue = needToOpen 
-        /*logging """
-${!needToOpen}
-$needCool
-${outsideTemperature <= desired - 4}
-$enoughTimeBetweenCloseAndOpen
-${!needToOpen && needCool && outsideTemperature <= desired - 4 && enoughTimeBetweenCloseAndOpen}"""
-*/
-
+    
         if(INpwSavingMode)
         {
-            needToOpen = outsideWithinRange && inside > criticalcold && inside < criticalhot  // in power saving mode open windows if within range and inside not too hot nor too cold
-        }
-
-
+          //  needToOpen = outsideWithinRange && inside > criticalcold && inside < criticalhot  // in power saving mode open windows if outside temp is within range and if inside is nor too hot nor too cold
+        } // this might use too much power and force windows to close, then the AC to run, then to open right again. We want to keep the smart decision making when away, based on away setpoints
 
         logging """<div style=\"width:102%;background-color:green;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">
 **********************WINDOWS************************
@@ -1868,8 +1857,6 @@ needToClose = $needToClose
 """
         def causeClosing = "${needToClose ? "WINDOWS CLOSED OR CLOSING BECAUSE: ${enoughTimeBetweenOpenAndClose && inside > desired + (swing * 2) && openSinceLong ? "enoughTimeBetweenOpenAndClose && inside > desired + (swing * 2) && openSinceLong" : inside < desired - swing ? "inside < desired - $swing" : !outsideWithinRange ? "!outsideWithinRange" : insideTempIsHopeLess ? "insideTempIsHopeLess" : !someAreOpen ? "Already closed" : atomicState.lastNeed == "heat" ? "atomicState.lastNeed = heat" : "FIRE THE DEVELOPER IF THIS MESSAGE SHOWS UP"}":""}"
 
-        if(needToClose && !needToOpenForcedToTrue){logging "${formatText(causeClosing, white, grey)}"}
-        if(needToOpenForcedToTrue){logging "needToOpenForcedToTrue set to $needToOpenForcedToTrue to prevent useless use of AC"}
 
         if(inWindowsModes || exception){
 

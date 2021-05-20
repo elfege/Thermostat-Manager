@@ -59,14 +59,24 @@ def MainPage() {
         }
         section("Main Settings") {
             href "thermostats", title: "Thermostats and other devices", description: ""
-            if(thermostat)
+            if(thermostat && outsideTemp)
             {
                 href "methods", title: "Methods of evaluation", description: ""
-
-                href "contactsensors", title: "Power Saving and Contacts Sensors", description: ""
-                href "powersaving", title: "Power Saving and Motion", description: ""           
-                href "windowsManagement", title: "Power Saving and Windows Control", description: ""
-                href "comfortSettings", title: "Comfort Options (bed time)", description: ""
+                if(dimmer)
+                {
+                    href "contactsensors", title: "Power Saving and Contacts Sensors", description: ""
+                    href "powersaving", title: "Power Saving and Motion", description: ""           
+                    href "windowsManagement", title: "Power Saving and Windows Control", description: ""
+                    href "comfortSettings", title: "Comfort Options (bed time)", description: ""
+                }
+                else
+                {
+                    paragraph formatText("You need to finish the 'methods' settings before you can access more settings such as contact sensors, power saving features, etc.", "white", "blue")
+                }
+            }
+            else
+            {
+                paragraph formatText("You need to select a thermostat and a weather data source before you can access more settings.", "white", "blue")
             }
 
         }
@@ -240,39 +250,103 @@ def methods(){
                 input "overrideDuration", "number", title: "Set a time limit", description: "number in hours, 0 means unlimitted time", submitOnChange:true
             }
             input "method", "enum", title:"select the method you want $app.name to use to adjust your thermostats cooling and heating set points", options:["dimmer","auto"],submitOnChange:true
-
-            //used by both methods
-            input "dimmer", "capability.switchLevel", title: "Use this dimmer as set point input source", required: false, submitOnChange:true
-
             if(method == "auto")
-            {
-                def reF = outsideTemp ? outsideTemp.currentValue("temperature") : 77
-                def des = 2
-                def refTempTitle = outsideTemp ? "Set an outside temperature reference (You can leave the current outside temperature: $reF)": "Set an outside temperature reference for which you will set (below) a desired variation (for example: 77)"
-                if(outsideTemp) {app.updateSetting("refTemp",[value:reF,type:"number"])}
-                if(!refTemp){app.updateSetting("desiredVar",[value:des,type:"number"])}
+            {    def text = "Note that the automatic settings are still in testing mode. If you find you're not happy with it, please think of switching to the dimmer method (and don't forget to create a virtual dimmer in Hubitat)"
+             paragraph formatText(text, "white", "red")
 
-                input "refTemp", "number", title: refTempTitle, required: false, range: "30..100", submitOnChange:true
-                input "desiredVar", "number", title: "Set a desired variation: by how much do you want inside temperature to differ from outside temp when outside temp is $reF?", required:false, range: "1..40", submitOnChange:true
-                if(refTemp && desiredVar)
-                {
-                    log.debug "refTemp = $refTemp desiredVar = $desiredVar"
-                    paragraph """ 
-In cooling mode, when outside temperature is ${refTemp}F your room will be cooled to ${refTemp.toInteger() - desiredVar.toInteger()}F. Now, based on these reference values, a linear function will apply hereafter (meaning this variation will change proportionally to how hot it gets outside)
-In heating mode, the function will work with a different method to make sure to keep you warm """
-                }
-                input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue: 75
-                input "minAutoHeat", "number", title: "Lowest heating set point", defaultValue: 70
-                input "minAutoCool", "number", title: "Lowest cooling set point", defaultValue: 70 
-                input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue: 77
+             //used by both methods
+             input "dimmer", "capability.switchLevel", title: "Use a dimmer as set point input source", required: true, submitOnChange:true
+             input "whyAdimmer", "bool", title: "Tell me why I need a virtual dimmer", submitOnChange:true
+             if(whyAdimmer)
+             {
+                 text = """A virtual dimmer is an easy way to tell the app your new desired temperature. Don't worry, this app will still learn from 
+whatever input you make on your thermostat directly. However, a dimmer has the benefit of allowing easy inputs using a voice assistant such as Alexa or Google Home. If your virtual dimmer's name is, let's say, 'temperature living', then 
+you just have to say: 'Alexa, set temperature living to 75'. Just don't say 'degrees' (or make sure this device is in the same group as your thermostat in Alexa's settings).
+Furthermore, it also allows facilitates some learning functions in this app. 
+
+Note that you could also very well use a real dimmer if you have one on hand that would serve as your main input source.
+I personally have one next to my bed to increase or decrease the temperature when I feel the need to.
+The app then remembers those entries and try to accomodate the temperature accordingly under variable circumstances"""
+                 paragraph formatText(text, "white", "blue")
+             }
+             input "tellMeMore", "bool", title: "Tell me how to create a virtual dimmer", submitOnChange:true
+             if(tellMeMore)
+             {    
+                 text = """In Hubitat, just go to 'devices' and click on 'add a virtual dimmer'. Then give it a name such as 'temperature living' to facilitate its usage with your voice assistant"""
+                 paragraph formatText(text, "white", "blue")
+             }
+
+
+
+             def outside = outsideTemp?.currentValue("temperature")
+             def reF = outsideTemp ? (celcius ? getCelcius(outside.toInteger()) : outside ) : (celcius ? getCelcius(77) : 77) 
+             reF = reF?.toInteger()
+             reF = celcius ? getCelcius(reF) : reF 
+             def des = 2
+             def refTempTitle = outsideTemp ? "Set an outside temperature reference (You can leave the current outside temperature: $reF)": "Set an outside temperature reference for which you will set (below) a desired variation (for example: 77)"
+             if(outsideTemp) {app.updateSetting("refTemp",[value:reF,type:"number"])}
+             if(!refTemp){app.updateSetting("desiredVar",[value:des,type:"number"])}
+
+             input "refTemp", "number", range:"-100..180", title: refTempTitle, required: false, submitOnChange:true
+             input "desiredVar", "number", title: "Set a desired variation: by how much do you want inside temperature to differ from outside temp when outside temp is $reF?", required:false, range: "1..40", submitOnChange:true
+             if(refTemp && desiredVar)
+             {
+                 log.debug "refTemp = $refTemp desiredVar = $desiredVar"
+             }
+             atomicState.converted = atomicState.converted ? atomicState.converted : false
+             if(maxAutoHeat != "null" && minAutoHeat != "null" && minAutoCool != "null" && maxAutoCool != "null")
+             {   
+                 input "convertToCelcius", "bool", title: "Convert all these values to Celcius (if you forgot to select this option on the main page)", submitOnChange:true
+                 if(convertToCelcius && !atomicState.converted)
+                 {
+                     atomicState.converted = true
+                     atomicState.maxAutoHeatRestore = maxAutoHeat // backup to prevent loop down conversions
+                     atomicState.minAutoHeatRestore = minAutoHeat
+                     atomicState.minAutoCoolRestore = minAutoCool
+                     atomicState.maxAutoCoolRestore = maxAutoCool
+                     
+                     app.updateSetting("celcius", [value:true, type:"bool"])
+                     
+                     app.updateSetting("maxAutoHeat", [value:getCelcius(maxAutoHeat.toInteger()), type:"number"])
+                     app.updateSetting("minAutoHeat", [value:getCelcius(minAutoHeat.toInteger()), type:"number"])
+                     app.updateSetting("minAutoCool", [value:getCelcius(minAutoCool.toInteger()), type:"number"])
+                     app.updateSetting("maxAutoCool", [value:getCelcius(maxAutoCool.toInteger()), type:"number"])
+                 }
+                 else if(!convertToCelcius && atomicState.converted)
+                 {
+                     atomicState.converted = false
+                     log.debug """restoring values: 
+                     
+atomicState.maxAutoHeatRestore = $atomicState.maxAutoHeatRestore
+atomicState.minAutoHeatRestore = $atomicState.minAutoHeatRestore
+atomicState.minAutoCoolRestore = $atomicState.minAutoCoolRestore
+atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
+"""
+                     app.updateSetting("maxAutoHeat", [value:atomicState.maxAutoHeatRestore, type:"number"])
+                     app.updateSetting("minAutoHeat", [value:atomicState.minAutoHeatRestore, type:"number"])
+                     app.updateSetting("minAutoCool", [value:atomicState.minAutoCoolRestore, type:"number"])
+                     app.updateSetting("maxAutoCool", [value:atomicState.maxAutoCoolRestore, type:"number"]) 
+                 }
+                 else if(convertToCelcius && atomicState.converted)
+                 {
+                  log.debug "already converted, doing nothing"   
+                 }
+                     
+                 log.debug "atomicState.converted = $atomicState.converted"
+             }
+             input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue:celcius?getCelcius(78):78, submitOnChange:true
+             input "minAutoHeat", "number", title: "Lowest heating set point", defaultValue:celcius?getCelcius(70):70, submitOnChange:true
+             input "minAutoCool", "number", title: "Lowest cooling set point",  defaultValue:celcius?getCelcius(70):70, submitOnChange:true 
+             input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue:celcius?getCelcius(78):78, submitOnChange:true
+
             }
 
-            input "antifreeze", "bool", title:"Optional: Customize Antifreeze",submitOnChange:true,defaultValue:true
-            input "backupSensor", "capability.temperatureMeasurement", title: "Optional but highly recommended: pick a backup sensor (in case of network failure)", required:false
-
+            input "antifreeze", "bool", title:"Optional: Customize Antifreeze",submitOnChange:true,defaultValue:false
+            
             if(antifreeze)
             {
                 input "safeValue", "number", title: "safety temperature", required:true, submitOnChange:true
+                input "backupSensor", "capability.temperatureMeasurement", title: "Optional but highly recommended: pick a backup sensor (in case of network failure)", required:false
 
             }
             input "sendAlert", "bool", title: "Send a sound and/or text notification when temperature goes below antifreeze safety", submitOnChange:true
@@ -299,11 +373,11 @@ In heating mode, the function will work with a different method to make sure to 
         }
     }
 }
-def updateFahrenheit(name, value){
-    if(celcius)
-    {                
-        app.updateSetting(name,[value:Math.round(getFahrenheit(safeValue.toInteger())).toInteger(),type:"number"]) //
-    }
+def closeBoolQuestions()
+{    
+    log.debug "closing bool questions"
+    app.updateSetting("whyAdimmer",[value:false,type:"bool"])
+    app.updateSetting("tellMeMore",[value:false,type:"bool"])
 }
 def contactsensors(){
 
@@ -566,7 +640,7 @@ with another thermostat's when some door contacts are open. Do you want to also 
     }
 }
 def pageNameUpdate(){
-
+    closeBoolQuestions()
     def pauseVar = "paused"
     def previousLabel = app.label // save current label
     if(atomicState.paused)
@@ -2500,7 +2574,7 @@ insideHum = $insideHum
 humThres = $humThres
 outside = $outside
 """     
-        
+
         return defaultV
     }
 
@@ -2723,13 +2797,13 @@ unit = $unit
 def getCelcius(int value){
     def C = (value - 32) * (5/9) 
     descriptionText "${value}F converted to ${C}C"
-    return C
+    return C.toInteger()
 }
 def getFahrenheit(int value){
     //(0°C × 9/5) + 32 = 32°F
     def F = (value * 9/5) + 32 
     descriptionText "${value}F converted to ${F}F"
-    return F
+    return F.toInteger()
 }
 /************************************************BOOLEANS******************************************************/
 boolean contactsAreOpen(){

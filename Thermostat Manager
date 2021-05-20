@@ -44,7 +44,7 @@ def MainPage() {
             //label title: "Assign a name",description:"$atomicState.appLabel", required: false, submitOnChange:true // can't use this because it shows html font tags
             input "appLabel", "text", title: "Assign a name to this instance of $app.name", submitOnChange:true
             app.updateLabel(appLabel)
-            input "celcius", "bool", title: "Celcius"
+            input "celsius", "bool", title: "Celsius"
         }
         section()
         {
@@ -279,9 +279,9 @@ The app then remembers those entries and try to accomodate the temperature accor
 
 
              def outside = outsideTemp?.currentValue("temperature")
-             def reF = outsideTemp ? (celcius ? getCelcius(outside.toInteger()) : outside ) : (celcius ? getCelcius(77) : 77) 
+             def reF = outsideTemp ? (celsius ? getCelsius(outside.toInteger()) : outside ) : (celsius ? getCelsius(77) : 77) 
              reF = reF?.toInteger()
-             reF = celcius ? getCelcius(reF) : reF 
+             reF = celsius ? getCelsius(reF) : reF 
              def des = 2
              def refTempTitle = outsideTemp ? "Set an outside temperature reference (You can leave the current outside temperature: $reF)": "Set an outside temperature reference for which you will set (below) a desired variation (for example: 77)"
              if(outsideTemp) {app.updateSetting("refTemp",[value:reF,type:"number"])}
@@ -296,8 +296,8 @@ The app then remembers those entries and try to accomodate the temperature accor
              atomicState.converted = atomicState.converted ? atomicState.converted : false
              if(maxAutoHeat != "null" && minAutoHeat != "null" && minAutoCool != "null" && maxAutoCool != "null")
              {   
-                 input "convertToCelcius", "bool", title: "Convert all these values to Celcius (if you forgot to select this option on the main page)", submitOnChange:true
-                 if(convertToCelcius && !atomicState.converted)
+                 input "convertToCelsius", "bool", title: "Convert all these values to Celsius (if you forgot to select this option on the main page)", submitOnChange:true
+                 if(convertToCelsius && !atomicState.converted)
                  {
                      atomicState.converted = true
                      atomicState.maxAutoHeatRestore = maxAutoHeat // backup to prevent loop down conversions
@@ -305,14 +305,14 @@ The app then remembers those entries and try to accomodate the temperature accor
                      atomicState.minAutoCoolRestore = minAutoCool
                      atomicState.maxAutoCoolRestore = maxAutoCool
 
-                     app.updateSetting("celcius", [value:true, type:"bool"])
+                     app.updateSetting("celsius", [value:true, type:"bool"])
 
-                     app.updateSetting("maxAutoHeat", [value:getCelcius(maxAutoHeat.toInteger()), type:"number"])
-                     app.updateSetting("minAutoHeat", [value:getCelcius(minAutoHeat.toInteger()), type:"number"])
-                     app.updateSetting("minAutoCool", [value:getCelcius(minAutoCool.toInteger()), type:"number"])
-                     app.updateSetting("maxAutoCool", [value:getCelcius(maxAutoCool.toInteger()), type:"number"])
+                     app.updateSetting("maxAutoHeat", [value:getCelsius(maxAutoHeat.toInteger()), type:"number"])
+                     app.updateSetting("minAutoHeat", [value:getCelsius(minAutoHeat.toInteger()), type:"number"])
+                     app.updateSetting("minAutoCool", [value:getCelsius(minAutoCool.toInteger()), type:"number"])
+                     app.updateSetting("maxAutoCool", [value:getCelsius(maxAutoCool.toInteger()), type:"number"])
                  }
-                 else if(!convertToCelcius && atomicState.converted)
+                 else if(!convertToCelsius && atomicState.converted)
                  {
                      atomicState.converted = false
                      log.debug """restoring values: 
@@ -327,17 +327,17 @@ atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
                      app.updateSetting("minAutoCool", [value:atomicState.minAutoCoolRestore, type:"number"])
                      app.updateSetting("maxAutoCool", [value:atomicState.maxAutoCoolRestore, type:"number"]) 
                  }
-                 else if(convertToCelcius && atomicState.converted)
+                 else if(convertToCelsius && atomicState.converted)
                  {
                      log.debug "already converted, doing nothing"   
                  }
 
                  log.debug "atomicState.converted = $atomicState.converted"
              }
-             input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue:celcius?getCelcius(78):78, submitOnChange:true
-             input "minAutoHeat", "number", title: "Lowest heating set point", defaultValue:celcius?getCelcius(70):70, submitOnChange:true
-             input "minAutoCool", "number", title: "Lowest cooling set point",  defaultValue:celcius?getCelcius(70):70, submitOnChange:true 
-             input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue:celcius?getCelcius(78):78, submitOnChange:true
+             input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue:celsius?getCelsius(78):78, submitOnChange:true
+             input "minAutoHeat", "number", title: "Lowest heating set point", defaultValue:celsius?getCelsius(70):70, submitOnChange:true
+             input "minAutoCool", "number", title: "Lowest cooling set point",  defaultValue:celsius?getCelsius(70):70, submitOnChange:true 
+             input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue:celsius?getCelsius(78):78, submitOnChange:true
 
             }
 
@@ -1353,7 +1353,7 @@ def mainloop(){
         def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature"): inside
 
         if(antifreeze && !atomicState.forcedSetPoint){
-            def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : celcius ? getCelcius(67) : 67
+            def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : celsius ? getCelsius(67) : 67
 
             if(inside <= safeVal || backupSensorTemp <= safeVal){
 
@@ -2234,8 +2234,8 @@ def getDesired(simpleModeActive){
     }
 
     // safety checkup for when alexa misinterpret a command to a light dimmer and applies it to the dimmer used by this app
-    def maxHi = celcius ? getCelcius(88) : 88 // assuming no one would be stupid enough to set their thermostat to 88, if so it's interpreted as a problem by the app
-    def minLow = celcius ? getCelcius(30) : 30 // same, but when setpoint is too low
+    def maxHi = celsius ? getCelsius(88) : 88 // assuming no one would be stupid enough to set their thermostat to 88, if so it's interpreted as a problem by the app
+    def minLow = celsius ? getCelsius(30) : 30 // same, but when setpoint is too low
     boolean problem = desired >= maxHi & lastNeed == "heat" ? true : desired <= minLow & lastNeed == "cool" ? true : false
     def lastNeed = atomicState.lastNeed
     logging """
@@ -2263,7 +2263,7 @@ problem detected : $problem
     if(problem)
     {
         log.warn "${thermostat}'s values are as inconsistent as ${dimmer ? "${dimmer}'s" : "the previous'"}, meaning data retrieval failed. Applying safe values instead until next user's input"
-        desired = celcius ? getCelcius(72) : 72 // safe value
+        desired = celsius ? getCelsius(72) : 72 // safe value
     }
 
     if(simpleModeActive)
@@ -2338,10 +2338,10 @@ def getNeed(desired, simpleModeActive, inside){
     def need = []
     def amplThreshold = 2
     def amplitude = Math.abs(inside - desired)
-    def lo = celcius ? getCelcius(50) : 50
-    def hi = celcius ? getCelcius(75) : 75
+    def lo = celsius ? getCelsius(50) : 50
+    def hi = celsius ? getCelsius(75) : 75
     def swing = outsideTemperature < lo  || outsideTemperature > hi ? 0.5 : 1 // lower swing when hot or cold outside
-    def loCoolSw = celcius ? getCelcius(60) : 60
+    def loCoolSw = celsius ? getCelsius(60) : 60
     def coolswing = insideHum < loCoolSw ? desired + swing : desired - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and desired / preventing amplitude paradox during mid-season
 
@@ -2560,7 +2560,7 @@ def getAutoVal(){
 
     def outside = outsideTemp?.currentValue("temperature") 
     def need = outside >= getOutsideThershold() ? "cool" : "heat"
-    def result = celcius ? getCelcius(73):73 // just a temporary default value  
+    def result = celsius ? getCelsius(73):73 // just a temporary default value  
     def defaultV = result
     //def humidity = outsideTemp?.currentValue("humidity") // outside humidity
     def humidity = getInsideHumidity() // in auto mode we evaluate based only on inside humidity
@@ -2588,10 +2588,10 @@ outside = $outside
         return defaultV
     }
 
-    def hiCool = celcius ? getCelcius(77) : 77
-    def loCool = celcius ? getCelcius(70) : 70
-    def hiHeat = celcius ? getCelcius(75) : 75
-    def loHeat = celcius ? getCelcius(70) : 70
+    def hiCool = celsius ? getCelsius(77) : 77
+    def loCool = celsius ? getCelsius(70) : 70
+    def hiHeat = celsius ? getCelsius(75) : 75
+    def loHeat = celsius ? getCelsius(70) : 70
     def maxAH = maxAutoHeat != null ? maxAutoHeat : hiHeat
     def minAC = minAutoCool != null ? minAutoCool : loCool
     def minAH = minAutoHeat != null ? minAutoHeat : loHeat
@@ -2702,7 +2702,7 @@ def getOutsideThershold(){
     // modulated with outside humidity 
 
     def humidity = outsideTemp?.currentValue("humidity") 
-    humidity = humidity != null ? humidity : celcius ? getCelcius(50):50 // prevents error from recently installed thermostats
+    humidity = humidity != null ? humidity : celsius ? getCelsius(50):50 // prevents error from recently installed thermostats
     if(humidity == null){
         def message = """$outsideTemp is not returning any humdity value - it may be because it was just included; if so, this will resolve ont its own.
 If this message still shows within an hour, check your thermostat configuration..."""
@@ -2713,14 +2713,14 @@ If this message still shows within an hour, check your thermostat configuration.
     // the higher the humidity, the lower the threshold so cooling can happen 
     def y = null // value to find
     def x = humidity ? humidity : 50 // 50 if no data returned to allow the app to run
-    def ya = celcius ? getCelcius(60):60 // coressponding outside temperature value for when humidity = xa 
-    def xa = celcius ? getCelcius(60):60 // humidity level
+    def ya = celsius ? getCelsius(60):60 // coressponding outside temperature value for when humidity = xa 
+    def xa = celsius ? getCelsius(60):60 // humidity level
     def m = -0.1 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
     //log.warn "y = $y"
-    def lo = celcius ? getCelcius(68):68
-    def hi = celcius ? getCelcius(60):60
+    def lo = celsius ? getCelsius(68):68
+    def hi = celsius ? getCelsius(60):60
     def result = y > hi ? hi : (y < lo ? lo : y) // max and min
 
     descriptionText "cool/heat decision result = ${y != result ? "$result (corrected from y=$y)" : "$result"} (humidity being ${humidity < 40 ? "low at ${humidity}%" : "high at ${humidity}%"})"
@@ -2729,7 +2729,7 @@ If this message still shows within an hour, check your thermostat configuration.
 }
 def getHumidityThreshold(){ // must be called only upon windows opening decision
     def humidity = outsideTemp?.currentValue("humidity") 
-    humidity = humidity != null ? humidity : celcius ? getCelcius(50):50
+    humidity = humidity != null ? humidity : celsius ? getCelsius(50):50
     def outsideTemperature = outsideTemp?.currentValue("temperature")
 
     // we want to set a humidity threshold depending on outside temperature
@@ -2738,8 +2738,8 @@ def getHumidityThreshold(){ // must be called only upon windows opening decision
 
     def y = null // value to find
     def x = outsideTemperature 
-    def ya = celcius ? getCelcius(70):70 // coressponding humidity threshold for when humidity = xa
-    def xa = celcius ? getCelcius(70):70
+    def ya = celsius ? getCelsius(70):70 // coressponding humidity threshold for when humidity = xa
+    def xa = celsius ? getCelsius(70):70
     def m = -3 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
@@ -2804,7 +2804,7 @@ unit = $unit
 
     return "${Math.round(remain)} $unit"
 }
-def getCelcius(int value){
+def getCelsius(int value){
     def C = (value - 32) * (5/9) 
     descriptionText "${value}F converted to ${C}C"
     return C.toInteger()

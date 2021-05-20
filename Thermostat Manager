@@ -304,9 +304,9 @@ The app then remembers those entries and try to accomodate the temperature accor
                      atomicState.minAutoHeatRestore = minAutoHeat
                      atomicState.minAutoCoolRestore = minAutoCool
                      atomicState.maxAutoCoolRestore = maxAutoCool
-                     
+
                      app.updateSetting("celcius", [value:true, type:"bool"])
-                     
+
                      app.updateSetting("maxAutoHeat", [value:getCelcius(maxAutoHeat.toInteger()), type:"number"])
                      app.updateSetting("minAutoHeat", [value:getCelcius(minAutoHeat.toInteger()), type:"number"])
                      app.updateSetting("minAutoCool", [value:getCelcius(minAutoCool.toInteger()), type:"number"])
@@ -316,7 +316,7 @@ The app then remembers those entries and try to accomodate the temperature accor
                  {
                      atomicState.converted = false
                      log.debug """restoring values: 
-                     
+
 atomicState.maxAutoHeatRestore = $atomicState.maxAutoHeatRestore
 atomicState.minAutoHeatRestore = $atomicState.minAutoHeatRestore
 atomicState.minAutoCoolRestore = $atomicState.minAutoCoolRestore
@@ -329,9 +329,9 @@ atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
                  }
                  else if(convertToCelcius && atomicState.converted)
                  {
-                  log.debug "already converted, doing nothing"   
+                     log.debug "already converted, doing nothing"   
                  }
-                     
+
                  log.debug "atomicState.converted = $atomicState.converted"
              }
              input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue:celcius?getCelcius(78):78, submitOnChange:true
@@ -342,7 +342,7 @@ atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
             }
 
             input "antifreeze", "bool", title:"Optional: Customize Antifreeze",submitOnChange:true,defaultValue:false
-            
+
             if(antifreeze)
             {
                 input "safeValue", "number", title: "safety temperature", required:true, submitOnChange:true
@@ -375,7 +375,7 @@ atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
 }
 def closeBoolQuestions()
 {    
-    log.debug "closing bool questions"
+    //log.debug "closing bool questions"
     app.updateSetting("whyAdimmer",[value:false,type:"bool"])
     app.updateSetting("tellMeMore",[value:false,type:"bool"])
 }
@@ -1291,6 +1291,7 @@ otherWindows?.on()
 }
 */
             boolean openMore = !atomicState.widerOpeningDone && atomicState.insideTempHasIncreased
+
             if(!openMore){
                 atomicState.lastOpeningTime = now()
             }
@@ -1961,7 +1962,7 @@ def windowsControl(desired, simpleModeActive, inside, outsideTemperature, humidi
         lastClosingTime = lastClosingTime.round(2)
         boolean closedSinceLong = lastClosingTime > 10.0 && someAreClosed // been open for more than 30 minutes
 
-        boolean tooColdInside = inside <= desired - 4 //&& outside 
+        boolean tooColdInside = inside <= desired - 8 
         //log.warn "tooColdInside = $tooColdInside : inside = $inside && desired = $desired"
         //closing error management for safety, if cmd didn't go through for whatever reason and temp went too low, force close the windows
         boolean exception = someAreOpen && ((atomicState.closedByApp && now() - lastClosingTime > 30 && tooColdInside) || (!outsideWithinRange && tooColdInside))
@@ -2056,6 +2057,13 @@ needToClose = $needToClose
                         def message = ""
                         if(onlySomeWindowsWillOpen && location.mode in modeSpecificWindows)
                         {
+                            log.warn"""
+openMore = $openMore
+atomicState.openByApp = $atomicState.openByApp
+atomicState.closedByApp = $atomicState.closedByApp
+atomicState.insideTempHasIncreased = $atomicState.insideTempHasIncreased
+atomicState.widerOpeningDone = $atomicState.widerOpeningDone
+"""
                             message = "opening $onlyThoseWindows ONLY"
                             def objectDevice
                             int i = 0
@@ -2127,7 +2135,7 @@ needToClose = $needToClose
                     }
                     else
                     {
-                        descriptionText "$windows were not closed by this app"
+                        //descriptionText "$windows were not closed by this app" // might be inadequate since atomicState.closedByApp = false after opening
                     }
                 }
                 else
@@ -2155,6 +2163,7 @@ needToClose = $needToClose
                         log.warn "closing $otherWindows"
                         otherWindows?.off()
                     }
+                    //log.debug "56FG"
                     atomicState.openByApp = false
                     atomicState.closedByApp = true
                 }
@@ -2180,6 +2189,7 @@ needToClose = $needToClose
                 if(windows.any{it.hasCapability("Switch Level")}){ 
                     windows.setLevel(50) 
                 }
+                //log.debug "56TG"
                 atomicState.openByApp = false
                 atomicState.closedByApp = true
                 if(doorsManagement && doorContactsAreOpen && otherWindows?.currentValue("switch") == "on")
@@ -2444,7 +2454,7 @@ inside > criticalcold :  ${inside > criticalcold}
         {
             if(!contactClosed) // if contacts open then just fan circulate
             {
-                message = "<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">FAN CIRCULATE DUE TO EXCESSIVE HEAT AND CONTACTS OPEN: $atomicState.listOfOpenContacts</div>"
+                message = formatText("FAN CIRCULATE DUE TO EXCESSIVE HEAT AND CONTACTS OPEN: $atomicState.listOfOpenContacts", "black", "red")
                 if(fancirculate)
                 {
                     thermostat.setThermostatFanMode("on")
@@ -2455,7 +2465,7 @@ inside > criticalcold :  ${inside > criticalcold}
             }
             else 
             {
-                message = """<div style=\"width:102%;background-color:red;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO HOT! ($cause)</div>"""
+                message = formatText("POWER SAVING MODE EXPCETION: TOO HOT! ($cause)", "black", "red")
                 need0 = "Cool"
                 need1 = "cool"
             }
@@ -2468,13 +2478,13 @@ inside > criticalcold :  ${inside > criticalcold}
 
         if(inside < criticalcold)
         {
-            message = """<div style=\"width:102%;background-color:blue;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE EXPCETION: TOO COLD! ($cause)</div>"""
+            message = formatText("POWER SAVING MODE EXPCETION: TOO COLD! ($cause)", "white", "blue")    
             need0 = "Heat"
             need1 = "heat"
         }
         else 
         {
-            message = """<div style=\"width:102%;background-color:blue;color:white;padding:4px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: -10px\">POWER SAVING MODE ($cause)</div>"""
+            message = formatText("POWER SAVING MODE ($cause)", "white", "green")   
         }
         log.warn message
 
@@ -2814,7 +2824,8 @@ boolean contactsAreOpen(){
     {
         atomicState.lastOpenEvt = atomicState.lastOpenEvt != null ? atomicState.lastOpenEvt : now()
         def deltaTime = openDelay != null ? openDelay : 30 
-        listOpen = WindowsContact?.findAll{it?.currentValue("contact") == "open"}     
+        listOpen = WindowsContact?.findAll{it?.currentValue("contact") == "open"}  
+        listOpen = listOpen.join(",")
         atomicState.listOfOpenContacts = "$listOpen"
         def messageText = "${listOpen.size() > 0 ? "Some contacts are open : $atomicState.listOfOpenContacts" : "all contacts closed"}"
 
@@ -2891,9 +2902,10 @@ boolean Active(){
             logging("motion returns true because outside of motion modes")
         }
         Dtime = 60 * 60 * 1000 
-        if(getLastMotionEvents(Dtime, "windows overrideTest")) // if no motion for over one hour then save power by resetting windows override
+        if(getLastMotionEvents(Dtime, "windows overrideTest") == 0) // if no motion for over one hour then save power by resetting windows override
         {
             //atomicState.openByApp = true
+            //log.debug "56HY"
             atomicState.closedByApp = true
         }
     }

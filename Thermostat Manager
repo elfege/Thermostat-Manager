@@ -1352,7 +1352,7 @@ def mainloop(){
         def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature"): inside
 
         if(antifreeze && !atomicState.forcedSetPoint){
-            def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : 67
+            def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : celcius ? getCelcius(67) : 67
 
             if(inside <= safeVal || backupSensorTemp <= safeVal){
 

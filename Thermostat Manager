@@ -62,17 +62,11 @@ def MainPage() {
             if(thermostat && outsideTemp)
             {
                 href "methods", title: "Methods of evaluation", description: ""
-                if(dimmer)
-                {
-                    href "contactsensors", title: "Power Saving and Contacts Sensors", description: ""
-                    href "powersaving", title: "Power Saving and Motion", description: ""           
-                    href "windowsManagement", title: "Power Saving and Windows Control", description: ""
-                    href "comfortSettings", title: "Comfort Options (bed time)", description: ""
-                }
-                else
-                {
-                    paragraph formatText("You need to finish the 'methods' settings before you can access more settings such as contact sensors, power saving features, etc.", "white", "blue")
-                }
+                href "contactsensors", title: "Power Saving and Contacts Sensors", description: ""
+                href "powersaving", title: "Power Saving and Motion", description: ""           
+                href "windowsManagement", title: "Power Saving and Windows Control", description: ""
+                href "comfortSettings", title: "Comfort Options (bed time)", description: ""
+
             }
             else
             {
@@ -236,108 +230,93 @@ def methods(){
     dynamicPage(pageProperties) {
 
         section(){
-            if(!thermostat)
-            {
-                paragraph formatText("Fill the thermostats section first.", "red", "white")
-                return
-            }
-
-        }
-        section(){
             input "autoOverride", "bool", title:"Pause this app when thermostat mode is 'auto'", submitOnChange: true, defaultValue: false
             if(autoOverride)
             {
                 input "overrideDuration", "number", title: "Set a time limit", description: "number in hours, 0 means unlimitted time", submitOnChange:true
             }
-            input "method", "enum", title:"select the method you want $app.name to use to adjust your thermostats cooling and heating set points", options:["dimmer","auto"],submitOnChange:true
+            
+            input "method", "enum", title:"select the method you want $app.name to use to adjust your thermostats cooling and heating set points", options:["normal","auto"],submitOnChange:true
+            paragraph formatText("""auto method: (BETA) the app manages your set points based on several algebra functions and on your inputs normal method: the app manages your set points based on your inputs and some algebra (notably for humidity) 
+
+NB: If you chose to not use a dimmer as an input source, you may have to repeat your input several times before the app 'understands' that this is a user input. There is no other way at the moment for the platform to distinguish the source of a command: from software or hardware, either way, the event handler will always return the evt.source as "DEVICE". Until that changes, the dimmer is the best way to insure that your inputs are taken into consideration as soon as you implement them. It also has the benefit to facilitate Alexa integration and voice commands if you name your dimmer 'temperature [room name]'
+""", "black", "white")
+
+            //used by both methods
+            input "dimmer", "capability.switchLevel", title: "Optional but HIGHLY recommended: Use a dimmer as an input source", required: false, submitOnChange:true
+            input "tellMeMore", "bool", title: "Tell me how to create a virtual dimmer", submitOnChange:true
+            if(tellMeMore)
+            {    
+                text = """In Hubitat, just go to 'devices' and click on 'add a virtual dimmer'. Then give it a name such as 'temperature living' to facilitate its usage with your voice assistant"""
+                paragraph formatText(text, "white", "blue")
+            }
+
+
             if(method == "auto")
-            {    def text = "Note that the automatic settings are still in testing mode. If you find you're not happy with it, please think of switching to the dimmer method (and don't forget to create a virtual dimmer in Hubitat)"
-             paragraph formatText(text, "white", "red")
+            {    
+                def text = "Note that the automatic settings are still in testing mode. If you find you're not happy with it, please think of switching to the dimmer method (and don't forget to create a virtual dimmer in Hubitat)"
+                paragraph formatText(text, "white", "red")
 
-             //used by both methods
-             input "dimmer", "capability.switchLevel", title: "Use a dimmer as set point input source", required: true, submitOnChange:true
-             input "whyAdimmer", "bool", title: "Tell me why I need a virtual dimmer", submitOnChange:true
-             if(whyAdimmer)
-             {
-                 text = """A virtual dimmer is an easy way to tell the app your new desired temperature. Don't worry, this app will still learn from 
-whatever input you make on your thermostat directly. However, a dimmer has the benefit of allowing easy inputs using a voice assistant such as Alexa or Google Home. If your virtual dimmer's name is, let's say, 'temperature living', then 
-you just have to say: 'Alexa, set temperature living to 75'. Just don't say 'degrees' (or make sure this device is in the same group as your thermostat in Alexa's settings).
-Furthermore, it also allows facilitates some learning functions in this app. 
+                def outside = outsideTemp?.currentValue("temperature")
+                def reF = outsideTemp ? (celsius ? getCelsius(outside.toInteger()) : outside ) : (celsius ? getCelsius(77) : 77) 
+                reF = reF?.toInteger()
+                reF = celsius ? getCelsius(reF) : reF 
+                def des = 2
+                def refTempTitle = outsideTemp ? "Set an outside temperature reference (You can leave the current outside temperature: $reF)": "Set an outside temperature reference for which you will set (below) a desired variation (for example: 77)"
+                if(outsideTemp) {app.updateSetting("refTemp",[value:reF,type:"number"])}
+                if(!refTemp){app.updateSetting("desiredVar",[value:des,type:"number"])}
 
-Note that you could also very well use a real dimmer if you have one on hand that would serve as your main input source.
-I personally have one next to my bed to increase or decrease the temperature when I feel the need to.
-The app then remembers those entries and try to accomodate the temperature accordingly under variable circumstances"""
-                 paragraph formatText(text, "white", "blue")
-             }
-             input "tellMeMore", "bool", title: "Tell me how to create a virtual dimmer", submitOnChange:true
-             if(tellMeMore)
-             {    
-                 text = """In Hubitat, just go to 'devices' and click on 'add a virtual dimmer'. Then give it a name such as 'temperature living' to facilitate its usage with your voice assistant"""
-                 paragraph formatText(text, "white", "blue")
-             }
+                input "refTemp", "number", range:"-100..180", title: refTempTitle, required: false, submitOnChange:true
+                input "desiredVar", "number", title: "Set a desired variation: by how much do you want inside temperature to differ from outside temp when outside temp is $reF?", required:false, range: "1..40", submitOnChange:true
+                if(refTemp && desiredVar)
+                {
+                    log.debug "refTemp = $refTemp desiredVar = $desiredVar"
+                }
+                atomicState.converted = atomicState.converted ? atomicState.converted : false
+                if(maxAutoHeat != "null" && minAutoHeat != "null" && minAutoCool != "null" && maxAutoCool != "null")
+                {   
+                    input "convertToCelsius", "bool", title: "Convert all these values to Celsius (if you forgot to select this option on the main page)", submitOnChange:true
+                    if(convertToCelsius && !atomicState.converted)
+                    {
+                        atomicState.converted = true
+                        atomicState.maxAutoHeatRestore = maxAutoHeat // backup to prevent loop down conversions
+                        atomicState.minAutoHeatRestore = minAutoHeat
+                        atomicState.minAutoCoolRestore = minAutoCool
+                        atomicState.maxAutoCoolRestore = maxAutoCool
 
+                        app.updateSetting("celsius", [value:true, type:"bool"])
 
-
-             def outside = outsideTemp?.currentValue("temperature")
-             def reF = outsideTemp ? (celsius ? getCelsius(outside.toInteger()) : outside ) : (celsius ? getCelsius(77) : 77) 
-             reF = reF?.toInteger()
-             reF = celsius ? getCelsius(reF) : reF 
-             def des = 2
-             def refTempTitle = outsideTemp ? "Set an outside temperature reference (You can leave the current outside temperature: $reF)": "Set an outside temperature reference for which you will set (below) a desired variation (for example: 77)"
-             if(outsideTemp) {app.updateSetting("refTemp",[value:reF,type:"number"])}
-             if(!refTemp){app.updateSetting("desiredVar",[value:des,type:"number"])}
-
-             input "refTemp", "number", range:"-100..180", title: refTempTitle, required: false, submitOnChange:true
-             input "desiredVar", "number", title: "Set a desired variation: by how much do you want inside temperature to differ from outside temp when outside temp is $reF?", required:false, range: "1..40", submitOnChange:true
-             if(refTemp && desiredVar)
-             {
-                 log.debug "refTemp = $refTemp desiredVar = $desiredVar"
-             }
-             atomicState.converted = atomicState.converted ? atomicState.converted : false
-             if(maxAutoHeat != "null" && minAutoHeat != "null" && minAutoCool != "null" && maxAutoCool != "null")
-             {   
-                 input "convertToCelsius", "bool", title: "Convert all these values to Celsius (if you forgot to select this option on the main page)", submitOnChange:true
-                 if(convertToCelsius && !atomicState.converted)
-                 {
-                     atomicState.converted = true
-                     atomicState.maxAutoHeatRestore = maxAutoHeat // backup to prevent loop down conversions
-                     atomicState.minAutoHeatRestore = minAutoHeat
-                     atomicState.minAutoCoolRestore = minAutoCool
-                     atomicState.maxAutoCoolRestore = maxAutoCool
-
-                     app.updateSetting("celsius", [value:true, type:"bool"])
-
-                     app.updateSetting("maxAutoHeat", [value:getCelsius(maxAutoHeat.toInteger()), type:"number"])
-                     app.updateSetting("minAutoHeat", [value:getCelsius(minAutoHeat.toInteger()), type:"number"])
-                     app.updateSetting("minAutoCool", [value:getCelsius(minAutoCool.toInteger()), type:"number"])
-                     app.updateSetting("maxAutoCool", [value:getCelsius(maxAutoCool.toInteger()), type:"number"])
-                 }
-                 else if(!convertToCelsius && atomicState.converted)
-                 {
-                     atomicState.converted = false
-                     log.debug """restoring values: 
+                        app.updateSetting("maxAutoHeat", [value:getCelsius(maxAutoHeat.toInteger()), type:"number"])
+                        app.updateSetting("minAutoHeat", [value:getCelsius(minAutoHeat.toInteger()), type:"number"])
+                        app.updateSetting("minAutoCool", [value:getCelsius(minAutoCool.toInteger()), type:"number"])
+                        app.updateSetting("maxAutoCool", [value:getCelsius(maxAutoCool.toInteger()), type:"number"])
+                    }
+                    else if(!convertToCelsius && atomicState.converted)
+                    {
+                        atomicState.converted = false
+                        log.debug """restoring values: 
 
 atomicState.maxAutoHeatRestore = $atomicState.maxAutoHeatRestore
 atomicState.minAutoHeatRestore = $atomicState.minAutoHeatRestore
 atomicState.minAutoCoolRestore = $atomicState.minAutoCoolRestore
 atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
 """
-                     app.updateSetting("maxAutoHeat", [value:atomicState.maxAutoHeatRestore, type:"number"])
-                     app.updateSetting("minAutoHeat", [value:atomicState.minAutoHeatRestore, type:"number"])
-                     app.updateSetting("minAutoCool", [value:atomicState.minAutoCoolRestore, type:"number"])
-                     app.updateSetting("maxAutoCool", [value:atomicState.maxAutoCoolRestore, type:"number"]) 
-                 }
-                 else if(convertToCelsius && atomicState.converted)
-                 {
-                     log.debug "already converted, doing nothing"   
-                 }
+                        app.updateSetting("maxAutoHeat", [value:atomicState.maxAutoHeatRestore, type:"number"])
+                        app.updateSetting("minAutoHeat", [value:atomicState.minAutoHeatRestore, type:"number"])
+                        app.updateSetting("minAutoCool", [value:atomicState.minAutoCoolRestore, type:"number"])
+                        app.updateSetting("maxAutoCool", [value:atomicState.maxAutoCoolRestore, type:"number"]) 
+                    }
+                    else if(convertToCelsius && atomicState.converted)
+                    {
+                        log.debug "already converted, doing nothing"   
+                    }
 
-                 log.debug "atomicState.converted = $atomicState.converted"
-             }
-             input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue:celsius?getCelsius(78):78, submitOnChange:true
-             input "minAutoHeat", "number", title: "Lowest heating set point", defaultValue:celsius?getCelsius(70):70, submitOnChange:true
-             input "minAutoCool", "number", title: "Lowest cooling set point",  defaultValue:celsius?getCelsius(70):70, submitOnChange:true 
-             input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue:celsius?getCelsius(78):78, submitOnChange:true
+                    log.debug "atomicState.converted = $atomicState.converted"
+                }
+                input "maxAutoHeat", "number", title: "Highest heating set point", defaultValue:celsius?getCelsius(78):78, submitOnChange:true
+                input "minAutoHeat", "number", title: "Lowest heating set point", defaultValue:celsius?getCelsius(70):70, submitOnChange:true
+                input "minAutoCool", "number", title: "Lowest cooling set point",  defaultValue:celsius?getCelsius(70):70, submitOnChange:true 
+                input "maxAutoCool", "number", title: "Highest cooling set point", defaultValue:celsius?getCelsius(78):78, submitOnChange:true
 
             }
 
@@ -373,8 +352,7 @@ atomicState.maxAutoCoolRestore = $atomicState.maxAutoCoolRestore
         }
     }
 }
-def closeBoolQuestions()
-{    
+def closeBoolQuestions(){    
     //log.debug "closing bool questions"
     app.updateSetting("whyAdimmer",[value:false,type:"bool"])
     app.updateSetting("tellMeMore",[value:false,type:"bool"])
@@ -489,7 +467,7 @@ def comfortSettings(){
 
                 def s = simpleModeButton?.size() 
                 def i = 0
-                input "simpleModeButton", "capability.holdableButton", title: "When ${!simpleModeButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} pushed, work in limited mode (hold or push again to cancel)", multiple: true, required: false, submitOnChange:true
+                input "simpleModeButton", "capability.holdableButton", title: "When ${!simpleModeButton ? "this button is" : (s > 1 ? "these buttons are" : "this button is")} pushed, work in limited mode (push again to cancel)", multiple: true, required: false, submitOnChange:true
                 input "simpleModeTimeLimit", "number", title: "Optional: return to normal operation after a certain amount of time", descripition: "Time in hours", submitOnChange:true
                 input "allowWindowsInSimpleMode", "bool", title:"Allow windows management, if any", defaultValue:false
                 if(simpleModeButton)
@@ -502,10 +480,11 @@ def comfortSettings(){
                         message = "Limited mode will be canceled after $simpleModeTimeLimit hours or after a new button event" //. Note that $devivesStr will not be able to cancel limited mode before time is out" 
                         paragraph formatText(message, "white", "grey") 
                     }
-                    message = simpleModeButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed and canceled when held, double tapped or pushed again. Power saving options will not be active. ${simpleModeTriggerType == "both" ? "Note taht $simpleModeButton supercede $simpleModeContact":""}" : ""
+                    message = simpleModeButton ? "$app.label will operate in limited mode when $devivesStr ${s > 1 ? "have" : "has"} been pushed and canceled when held, double tapped or pushed again. Power saving options will not be active" : ""
+                    if(message) paragraph formatText(message, "white", "grey") //simpleModeButton message
                 }
             }
-            paragraph formatText(message, "white", "grey")
+
             def bedDevice = simpleModeTriggerType == "contact" ? simpleModeContact : simpleModeButton
             input "setSpecialTemp", "bool", title: "Keep room at a preset temperature when in $bedDevice is ${simpleModeTriggerType == "contact" ? "closed" : "pushed"}", submitOnChange:true, defaultValue:false
             input "specialSubstraction", "bool", title: "Lower the current set point instead?", submitOnChange:true
@@ -544,7 +523,7 @@ def windowsManagement(){
                 {
                     if(windows.size() > 1)
                     {
-                        input "onlySomeWindowsWillOpen", "bool", title:"Differentiate some windows behavior based on location mode", submitOnChange: true, defaultValue:false
+                        input "onlySomeWindowsWillOpen", "bool", title:"Differentiate some windows' behavior based on location mode", submitOnChange: true, defaultValue:false
 
                         if(onlySomeWindowsWillOpen)
                         {
@@ -732,7 +711,7 @@ def initialize(){
         atomicState.lastNotification = now() as long
         atomicState.motionEvents = 0
     atomicState.lastTimeBsTrue = now() as long
-        atomicState.forcedSetPoint = false
+        atomicState.setPointOverride = false
 
     logging("subscribing to events...")
 
@@ -750,8 +729,10 @@ def initialize(){
     if(dimmer)
     {
         subscribe(dimmer, "level", dimmerHandler)
+        descriptionText "subscribed $dimmer to dimmerHandler"
     }
-    descriptionText "subscribed $dimmer to dimmerHandler"
+    atomicState.lastThermostatInput = atomicState.lastThermostatInput ? atomicState.lastThermostatInput : thermostat.currentValue("thermostatSetpoint")
+
     subscribe(thermostat, "heatingSetpoint", setPointHandler)
     subscribe(thermostat, "coolingSetpoint", setPointHandler)
     subscribe(thermostat, "thermostatMode", thermostatModeHandler)
@@ -792,8 +773,7 @@ def initialize(){
     }
     if(simpleModeButton)
     {
-        subscribe(simpleModeButton, "held", holdableButtonHandler)   
-        subscribe(simpleModeButton, "pushed", holdableButtonHandler)   
+        subscribe(simpleModeButton, "pushed", pushableButtonHandler)   
 
     }
     if(buttonPause)
@@ -923,7 +903,7 @@ def simpleModeContactHandler(evt){
         mainloop()
     }
 }
-def holdableButtonHandler(evt){
+def pushableButtonHandler(evt){
     if(!atomicState.paused){
         if(location.mode in restricted){
             descriptionText "location in restricted mode, doing nothing"
@@ -1029,11 +1009,9 @@ def setPointHandler(evt){
             descriptionText "location in restricted mode, doing nothing"
             return
         } 
-        logging """$evt.device $evt.name $evt.value
-sync ? $sync
-thermostatB: $thermostatB
+        log.trace "$evt.device $evt.name $evt.value SOURCE: $evt.source"
 
-"""    
+        logging "sync ? $sync thermostatB: $thermostatB" 
 
         if(sync && thermostatB)
         {
@@ -1077,7 +1055,6 @@ any found with same current value: ${thermostatB?.any{it -> it.currentValue(evt.
         if(!atomicState.setpointSentByApp)
         {
             descriptionText "new $evt.name is $evt.value -------------------------------------"
-
             if(method == "auto" && !atomicState.setpointSentByApp)
             {
                 log.debug "Updating automatic settings based on new thermostat set point input $evt.value"
@@ -1085,8 +1062,7 @@ any found with same current value: ${thermostatB?.any{it -> it.currentValue(evt.
                 updateValues(evt.value)
             }
 
-
-            def currDim = dimmer?.currentValue("level")
+            def currDim = !dimmer ? atomicState.lastThermostatInput : dimmer?.currentValue("level")
             def thermMode = thermostat?.currentValue("thermostatMode")
 
             // this will be true only if thermostat is heating or cooling; therefore, dimmer won't be adjusted if off 
@@ -1096,6 +1072,7 @@ any found with same current value: ${thermostatB?.any{it -> it.currentValue(evt.
             def message = """
 atomicState.setpointSentByApp = $atomicState.setpointSentByApp
 Current $dimmer value is $currDim
+atomicState.lastThermostatInput = $atomicState.lastThermostatInput
 atomicState.lastNeed = $atomicState.lastNeed   
 evt.value = $evt.value   
 """
@@ -1114,28 +1091,31 @@ evt.value = $evt.value
             // make sure the therm event is same as current need
             // as to not apply a value from a differentiated thermostat mode (heat set to 75 will modify coolingSP and then trigger an event)
 
-            if(correspondingMode && currDim != evt.value) 
+            if(correspondingMode && currDim != evt.value) // if an only if this is regarding the right operating mode, update the dimmer's value
             {
-                if(method == "dimmer")
+                if(method == "normal")
                 {
-                    //runIn(3, setDimmer, [data:evt.value.toInteger()]) 
-                    log.debug "SETTING $dimmer to $evt.value"
-
-                    setDimmer(evt.value) 
+                    //runIn(3, setDimmer, [data:evt.value.toInteger()])
+                    
+                   setDimmer(evt.value) // called only if it's not a value automatically set by the thermostat on the opposite operating mode (heatingSetpoint when cooling)
+                    
+                    // every thermostat making sure to keep an offset between heating SP and cooling SP equal or superior to 2 degrees
+                    //atomicState.lastThermostatInput = evt.value //////done by setDimmer()
+                    
                 }
             }
             if(!correspondingMode)
             {
-                descriptionText "not updating dimmer because this is $evt.name and current mode is $thermMode"
+                descriptionText "not updating ${dimmer ? "dimmer" : "atomicState.lastThermostatInput"} because this is $evt.name and current mode is $thermMode"
             }
             if(currDim == evt.value)
             {
-                descriptionText "dimmer level ok (${dimmer?.currentValue("level")} == ${evt.value}"
+                descriptionText "${dimmer ? "dimmer" : "atomicState.lastThermostatInput"} value ok (${dimmer ? '${dimmer?.currentValue("level")}' : "atomicState.lastThermostatInput"} = ${evt.value}"
             }
         }
         else
         {
-            log.warn "event generated by this app, doing nothing"
+            log.trace "event generated by this app, doing nothing"
         }
         atomicState.setpointSentByApp = false // always reset this static/class variable after calling it
         //mainloop() // prevent feedback loops so both dimmer and thermosta set points can be modified. Changes will be made on next scheduled loop or motion events
@@ -1160,15 +1140,12 @@ def dimmerHandler(evt){
             def outsideThreshold = getOutsideThershold()
             def needSituation = outside < outsideThreshold ? "heat" : "cool"
             def newRefTemp = outside
-
-
-
             updateValues(evt.value)
 
         }
         else if(!atomicState.setpointSentByApp)
         {
-            log.info "NOT AUTO METHOD"
+            logging "NOT AUTO METHOD"
         }
         else if(atomicState.setpointSentByApp)
         {
@@ -1315,7 +1292,7 @@ otherWindows?.off()
 
 /************************************************MAIN functions*************************************************/
 def mainloop(){
-
+    atomicState.lastThermostatInput = atomicState.lastThermostatInput ? atomicState.lastThermostatInput : thermostat.currentValue("thermostatSetpoint")
     if(!atomicState.paused)
     {
 
@@ -1325,7 +1302,7 @@ def mainloop(){
         }    
 
         boolean simpleModeActive = simpleModeIsActive()
-        boolean motionActive = Active() || simpleModeContactClosed
+        boolean motionActive = Active()
         boolean contactClosed = !contactsAreOpen()
         boolean doorContactsAreOpen = doorsContactsAreOpen()
 
@@ -1352,7 +1329,7 @@ def mainloop(){
         // antifreeze precaution (runs after calling atomicState.antifreeze on purpose here)
         def backupSensorTemp = backupSensor ? backupSensor.currentValue("temperature"): inside
 
-        if(antifreeze && !atomicState.forcedSetPoint){
+        if(antifreeze && !atomicState.setPointOverride){
             def safeVal = safeValue != null ? safeValue : criticalcold != null ? criticalcold : celsius ? getCelsius(67) : 67
 
             if(inside <= safeVal || backupSensorTemp <= safeVal){
@@ -1377,7 +1354,7 @@ safeValue = $safeVal
             }
 
         }
-        else if(!atomicState.forcedSetPoint)// mandatory anti freeze
+        else if(!atomicState.setPointOverride)// mandatory anti freeze
         {
             def defaultSafeTemp = criticalcold == null ? 58 : criticalcold <= 58 ? criticalcold : 58 
             if(inside <= defaultSafeTemp || backupSensorTemp <= defaultSafeTemp){
@@ -1456,11 +1433,11 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                 tooMuchPower = currentPower > maxPowerConsumption.toInteger()
                 if(tooMuchPower)
                 {
-                    log.warn formatText("power consumption heater + thermostat = $currentPower Watts", "white", "red")
+                    log.warn formatText("power consumption ${heater?.currentValue("power")!=0 ? "$heater +":""} $thermostat = $currentPower Watts", "white", "red")
                 }
                 else
                 {
-                    descriptionText formatText("power consumption heater + thermostat = $currentPower Watts", "white", "lightgreen")
+                    descriptionText formatText("power consumption ${heater?.currentValue("power")!=0 ? "$heater +":""} $thermostat = $currentPower Watts", "white", "lightgreen")
                 }
                 //tooMuchPower = devicePriority == "$thermostat" && heatpumpConditionsTrue ? true : tooMuchPower
                 // redundant: if device priority is thermostat and heatpump conditions are true, then the thermostat will be shut down
@@ -1480,7 +1457,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
 
             /****************CONSISTENCY TESTS AND EMERGENCY HEAT/COLD DUE TO A POSSIBLE BADLY LOCATED THERMOSTAT*************************/
             double swing = UserSwing ? UserSwing.toDouble() : 0.5 // swing is the desired amplitude set at the level of the thermostat directly (hardware setting) - user must specify, default is 0.5
-            double undesirableOffset = swing + 2
+            double undesirableOffset = 2
             // the problem is when the thermostat returns a temp that is too close to the desired temp while the alt sensor is still too far from it
             double thermostatTemp = thermostat.currentValue("temperature").toDouble() 
             //boolean insideTempNotOk = need == "cool" ? inside > desired + swing : need == "heat" ? inside < desired - swing : false 
@@ -1489,9 +1466,9 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
             // so, if that happens while inside temperature is still far beyond or below the desired temperature (+/- default swing), then
             // we want the app to increase the set point (if need is heat) or decrease it (if need is cool) 
             // so as to force the unit to continue to work until alternate sensors array measures an average inside temp that matches the target (+/- swing)
-            boolean thermTempTooCloseToCoolTargetdWhileInsideNotGood = (thermostatTemp == desired || thermostatTemp >= desired + swing) && inside > desired + undesirableOffset
-            boolean thermTempTooCloseToHeatTargetdWhileInsideNotGood = (thermostatTemp == desired || thermostatTemp <= desired - swing) && inside < desired - undesirableOffset
-            def thermostatTempProblem = (need == "cool" && thermTempTooCloseToCoolTargetdWhileInsideNotGood )|| (need == "heat" && thermTempTooCloseToHeatTargetdWhileInsideNotGood)
+            boolean thermTempTooCloseToCoolTargetdWhileInsideNotGood = (thermostatTemp == desired || thermostatTemp == desired + swing) && inside >= desired + undesirableOffset
+            boolean thermTempTooCloseToHeatTargetdWhileInsideNotGood = (thermostatTemp == desired || thermostatTemp == desired - swing) && inside <= desired - undesirableOffset
+            def thermostatTempProblem = (need == "cool" && thermTempTooCloseToCoolTargetdWhileInsideNotGood ) || (need == "heat" && thermTempTooCloseToHeatTargetdWhileInsideNotGood)
             boolean thermTempDiscrepancy = sensor && thermostatTempProblem && contactClosed 
 
             logging """
@@ -1508,7 +1485,8 @@ thermTempTooCloseToHeatTargetdWhileInsideNotGood = $thermTempTooCloseToHeatTarge
 
             if(manageThermDiscrepancy && thermTempDiscrepancy && contactClosed)
             {                
-                //atomicState.forcedSetPoint = false
+                atomicState.setPointOverride = true // avoids modifying desired values (in setDimmer) and prevents the app from running other normal operations
+                // since it is reset at setDimmer() (to allow for new user's inputs), it must be set to true each time here, or other normal functions will run
 
                 def m = ""
                 def delayBtwMessages = 5*60000
@@ -1526,22 +1504,26 @@ This should not be affecting your input values (your desired temperature)"""
                 {
                     def timeUnit = timeBeforeNewtOverrideBigMessage < 1 ? "seconds" : timeBeforeNewtOverrideBigMessage >= 2 ? "minutes" : "minute"
                     def timeDisplay = timeBeforeNewtOverrideBigMessage < 1 ? timeBeforeNewtOverrideBigMessage*100 : timeBeforeNewtOverrideBigMessage 
-                    m = "SET POINT OVERRIDE (mode details in about ${timeDisplay} ${timeUnit})"
+                    m = "SET POINT OVERRIDE (detailed description in ${timeDisplay} ${timeUnit})"
                 }
 
                 log.warn formatText(m, "red", "white")
 
-                // if(!atomicState.forcedSetPoint)     
+                // if(!atomicState.setPointOverride)     
                 toggleRelatedSwitch("on") // make sure the power plug, if any, is turned on since this is an emergency heating/cooling 
 
                 def temporarySetpoint = need == "cool" ? 62 : need == "heat" ? 85 : 72 // 72 if by any chance this went wrong
                 def currCSP = thermostat.currentValue("coolingSetpoint")
                 def currHSP = thermostat.currentValue("heatingSetpoint")
                 boolean notSet = need == "cool" && currSP != temporarySetpoint ? true : need == "heat" && currHSP != temporarySetpoint ? true : false 
-                notSet = currCSP > currHSP + 2 // we want to keep a +2-2 difference between heating and cooling setpoints to prevent cricling down values
+                notSet = notSet && currCSP > currHSP + 2 // we want to keep a +2-2 difference between heating and cooling setpoints to prevent cricling down values
                 if(notSet)
                 {
+                    atomicState.setpointSentByApp = true // prevents new inputs to be taken as new heuristics // must be reset at setDimmer
+                    
+                    
                     log.debug "setting $thermostat to $need"
+
                     thermostat.setThermostatMode(need)
                     log.debug "$thermostat $cmd to $temporarySetpoint"
                     thermostat."${cmd}"(temporarySetpoint)
@@ -1555,14 +1537,12 @@ This should not be affecting your input values (your desired temperature)"""
                         thermostat.setCoolingSetpoint(temporarySetpoint+2) 
                         log.debug "$thermostat coolingSetpoint set to ${temporarySetpoint+2} to prevent circling down SP's"
                     }
-
-                    atomicState.lastSetTime = now()
-                    atomicState.forcedSetPoint = true // avoid modifying dimmer's and desired values
+                    atomicState.lastSetTime = now()                    
                 }
             }
-            else if(!thermTempDiscrepancy && atomicState.forcedSetPoint)
+            else if(!thermTempDiscrepancy && atomicState.setPointOverride)
             {
-                atomicState.forcedSetPoint = false // if this line is read, then setpoint override is no longer needed
+                atomicState.setPointOverride = false // if this line is read, then setpoint override is no longer needed
                 if(manageThermDiscrepancy) log.trace formatText("END OF SET POINT OVERRIDE - BACK TO NORMAL OPERATION", "white", "grey")
             }
 
@@ -1590,7 +1570,7 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}""
             // if forececommand true and need is not off make sure we're not under heat pump cold conditions 
             forceCommand = forceCommand && need != "off" ? !heatpumpConditionsTrue : forceCommand // if need = off then apply forcecommand functions to make sure to turn it off
 
-            if(!atomicState.forcedSetPoint && thermMode != need || forceCommand && contactClosed)
+            if(!atomicState.setPointOverride && thermMode != need || forceCommand && contactClosed)
             {
                 if(forceCommand && OperatingStateOk) {log.warn "FORCING CMD TO DEVICE BECAUSE temperature difference is TOO HIGH"}
                 if(forceCommand && !OperatingStateOk && !thermTempDiscrepancy) {log.warn "FORCING CMD TO DEVICE BECAUSE current operating state is INCONSISTENT"}
@@ -1639,8 +1619,8 @@ ${thermostat.currentValue("thermostatOperatingState") == currentOperatingNeed}""
                 logging("Thermostat already set to $need mode")
             }
 
-            //log.trace "atomicState.forcedSetPoint = $atomicState.forcedSetPoint"
-            if(!atomicState.forcedSetPoint)
+            //log.trace "atomicState.setPointOverride = $atomicState.setPointOverride"
+            if(!atomicState.setPointOverride)
             {
                 if(need != "off" && currSP != desired && !thermTempDiscrepancy)
                 {
@@ -1836,7 +1816,7 @@ def resetCmdForce(){
 }
 def setDimmer(val){
 
-    if(!atomicState.forcedSetPoint)
+    if(!atomicState.setPointOverride)
     {
         if(dimmer)
         {
@@ -1845,11 +1825,20 @@ def setDimmer(val){
             //so it needs to be rounded so as to be parsed as a string in the dimmer driver        
             descriptionText "$dimmer set to $val BY THIS APP"
         }
+        else
+        {
+            def thisVal = Math.round(Double.parseDouble(val))
+            atomicState.lastThermostatInput = thisVal            
+            //atomicState.setpointSentByApp = true   // not applicable in this case since it won't trigger any device event
+            descriptionText "atomicState.lastThermostatInput set to $thisVal"
+        }
     }
     else
     {
-        log.warn "SETPOINT OVERRIDE DUE TO THERMOSTAT DISCREPANCY NOT CHANGING DIMMER VALUE"
+        log.trace "SETPOINT OVERRIDE DUE TO THERMOSTAT DISCREPANCY NOT CHANGING DIMMER VALUE"
     }
+    
+    atomicState.setPointOverride = false
 
 
 }
@@ -2199,9 +2188,6 @@ atomicState.widerOpeningDone = $atomicState.widerOpeningDone
                 }
             }
         }
-        else if(windows && simpleModeContactClosed){
-            logging "no windows management due to $simpleModeContact"
-        }
 
     }
     else if(!windows) {
@@ -2230,7 +2216,8 @@ def getDesired(simpleModeActive){
     }
     else
     {
-        desired = dimmer?.currentValue("level")
+        desired = !dimmer ? atomicState.lastThermostatInput.toInteger() : dimmer?.currentValue("level")
+
     }
 
     // safety checkup for when alexa misinterpret a command to a light dimmer and applies it to the dimmer used by this app
@@ -2243,6 +2230,7 @@ maxAutoHeat = $maxAutoHeat
 minAutoCool = $minAutoCool
 maxHi = $maxHi
 minLow = $minLow
+atomicState.lastThermostatInput = $atomicState.lastThermostatInput 
 dimmer value = ${dimmer?.currentValue("level")}
 heatingSetpoint = ${thermostat.currentValue("heatingSetpoint")}
 coolingSetpoint = ${thermostat.currentValue("coolingSetpoint")}
@@ -2714,13 +2702,13 @@ If this message still shows within an hour, check your thermostat configuration.
     def y = null // value to find
     def x = humidity ? humidity : 50 // 50 if no data returned to allow the app to run
     def ya = celsius ? getCelsius(60):60 // coressponding outside temperature value for when humidity = xa 
-    def xa = celsius ? getCelsius(60):60 // humidity level
+    def xa = 60 // humidity level
     def m = -0.1 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
     //log.warn "y = $y"
-    def lo = celsius ? getCelsius(68):68
-    def hi = celsius ? getCelsius(60):60
+    def lo = celsius ? getCelsius(60):60
+    def hi = celsius ? getCelsius(72):72
     def result = y > hi ? hi : (y < lo ? lo : y) // max and min
 
     descriptionText "cool/heat decision result = ${y != result ? "$result (corrected from y=$y)" : "$result"} (humidity being ${humidity < 40 ? "low at ${humidity}%" : "high at ${humidity}%"})"
@@ -2739,11 +2727,12 @@ def getHumidityThreshold(){ // must be called only upon windows opening decision
     def y = null // value to find
     def x = outsideTemperature 
     def ya = celsius ? getCelsius(70):70 // coressponding humidity threshold for when humidity = xa
-    def xa = celsius ? getCelsius(70):70
+    def xa = 70 // humidity level
     def m = -3 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
-    //y = y >= 78 ? 
+
+    descriptionText "Humidity threshold = $y"
 
     return y
 
@@ -3103,5 +3092,5 @@ def disabledescription(){
     app.updateSetting("description",[value:"false",type:"bool"])
 }
 def formatText(title, textColor, bckgColor){
-    return  "<div style=\"width:102%;background-color:${bckgColor};color:${textColor};padding:10px;font-weight: bold;box-shadow: 1px 2px 2px #bababa;margin-left: 3px\">${title}</div>"
+    return  "<div style=\"width:100%;background-color:${bckgColor};border: 10px solid ${bckgColor}; color:${textColor};padding:0px;font-weight: bold;box-shadow:4px 4px 4px 4px #bababa;margin-left:0px\">${title}</div>"
 }

@@ -132,7 +132,7 @@ def thermostats(){
             }
             if(thermostat || !hasHumidity)
             {
-                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "optional: select a humidity sensor", required:false, submitOnChange:true
+                input "optionalHumSensor", "capability.relativeHumidityMeasurement", title: "${!hasHumidity ? "S":"Optional: s"}elect a humidity sensor", required:false, submitOnChange:true
             }
             input "forceCmd", "bool", title:"Force commands (for old non-Zwave-plus devices that don't refresh their status properly under certain mesh conditions)", defaultValue:false
             input "pw", "capability.powerMeter", title:"optional: verify my thermostat's consistent operation with a power meter", required:false
@@ -175,17 +175,17 @@ def thermostats(){
                         log.warn """
 devicePriority = $devicePriority
 """
-                        if(pw)
-                        {
-                            if(pw?.hasCapability("Switch"))
-                            {
-                                input "controlpwswitch", "bool", title: "Also control $pw as a switch", defaultValue:false, submitOnChange:true
-                                if(controlpwswitch)
-                                {
-                                    paragraph formatText("$pw will be toggled when the app notices that some commands are not going through properly and everytime power consumption is too high. It'll turn it back on $thermostat is needed again", "white", "grey")
-                                }
-                            }
-                        }
+                        /* if(pw) // too problematic
+{
+if(pw?.hasCapability("Switch"))
+{
+input "controlpwswitch", "bool", title: "Also control $pw as a switch", defaultValue:false, submitOnChange:true
+if(controlpwswitch)
+{
+paragraph formatText("$pw will be toggled when the app notices that some commands are not going through properly and everytime power consumption is too high. It'll turn it back on $thermostat is needed again", "white", "grey")
+}
+}
+}*/
                     }
                 }
             }
@@ -957,7 +957,7 @@ def initialize(){
     }
     if(controlPowerConsumption || coolerControlPowerConsumption)
     {
-        schedule("0 0/5 * * * ?", pollPowerMeters)
+        schedule("0 0/1 * * * ?", pollPowerMeters)
     }
 
     schedule("0 0/5 * * * ?", mainloop)
@@ -975,7 +975,7 @@ def modeChangeHandler(evt){
     {
         log.trace "$thermostat set to $restrictedThermMode due to restricted mode"
         thermostat."${restrictedThermMode}"()
-        toggleRelatedSwitch("off")  // make sure this one is off 
+        //toggleRelatedSwitch("off")  // make sure this one is off 
         heater?.off() // make sure this one is off 
         cooler?.off() // same
         def fanCmd = keepFanOnInRestrictedMode ? "on" : "off"
@@ -1031,7 +1031,7 @@ def contactHandler(evt){
             return
         } 
         log.info "$evt.device is $evt.value"
-        atomicState.lastOpenEvt = now() 
+        atomicState.lastContactOpenEvt = now() 
         runIn(openDelay, mainloop,[data:"contactHandler"])
     }
 }
@@ -1042,7 +1042,13 @@ def motionHandler(evt){
             descriptionText "location in restricted mode, doing nothing"
             return
         } 
-        
+        atomicState.activeMotionCount = atomicState.activeMotionCount ? atomicState.activeMotionCount : 0
+        if(evt.value == "active")
+        {
+            atomicState.activeMotionCount += 1 // eventsSince() can be messy // hubitat still doesn't acknowledge the issue despite several tickets and screenshots. 
+            atomicState.lastMotionEvent = now() // initialized at install or update
+            // so this is a workaround in the meantime
+        }
         mainloop("motionHandler")
     }
 }
@@ -1466,7 +1472,7 @@ def windowsHandler(evt){
 /************************************************MAIN functions*************************************************/
 def mainloop(source){
 
-    logging "mainloop called by $source"
+    descriptionText "mainloop called by $source"
 
     atomicState.lastThermostatInput = atomicState.lastThermostatInput ? atomicState.lastThermostatInput : thermostat.currentValue("thermostatSetpoint")
     if(!atomicState.paused)
@@ -1516,6 +1522,7 @@ inside = $inside
 safeValue = $safeVal
 """
                 thermostat.setThermostatMode("heat")
+                atomicState.resendAttempt = now()
                 thermostat.setHeatingSetpoint(72)
                 windows?.off() // make sure all windows linked to this instance are closed
                 heater?.on()// turn on the alternate heater, if any
@@ -1529,7 +1536,7 @@ safeValue = $safeVal
             }
 
         }
-        else if(!atomicState.setPointOverride)// mandatory anti freeze
+        else if(!atomicState.setPointOverride)// default & built-in this app's anti freeze
         {
             def defaultSafeTemp = criticalcold == null ? 58 : criticalcold <= 58 ? criticalcold : 58 
             if(inside <= defaultSafeTemp || backupSensorTemp <= defaultSafeTemp){
@@ -1540,6 +1547,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
 """
                 windows?.off() // make sure all windows linked to this instance are closed
                 thermostat.setThermostatMode("heat")
+                atomicState.resendAttempt = now()
                 thermostat.setHeatingSetpoint(72)
                 atomicState.antifreeze = true
                 //sendNotification()
@@ -1563,6 +1571,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                     log.warn "END OF OVERRIDE, turning off $thermostat"
                     atomicState.override = false
                     thermostat.setThermostatMode("off")
+                    atomicState.offAttempt = now()
                 }
                 else 
                 {
@@ -1669,7 +1678,8 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                 if(thermostat.currentValue("thermostatMode") != "off")
                 {
                     thermostat.setThermostatMode("off") // so as to take precedence over any other condition 
-                    runIn(4, toggleRelatedSwitch, [data:"off"]) // switch that powers this specific thermostat, if any and if option was enabled // 4secs to give time for proper off() method to take effect
+                    atomicState.offAttempt = now()
+                    //runIn(4, toggleRelatedSwitch, [data:"off"]) // switch that powers this specific thermostat, if any and if option was enabled // 4secs to give time for proper off() method to take effect
                     log.info "$thermostat turned off due ${preferCooler && atomicState.lastNeed == "cool" ? "to preferCooler option" : "to heatpump or power usage conditions"}"
                 }
             }
@@ -1683,25 +1693,35 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                 long timeElapsedSinceLastOff = now() - atomicState.offAttempt // when device driver returns state off while in fact signal didn't go through
                 long threshold = 4 * 60 * 1000 // give it 4 minutes to kick in before attempting new request 
                 boolean timeIsUp = timeElapsedSinceLastResend > threshold
-                boolean timeIsUpOff = timeElapsedSinceLastOff > 30000
-                boolean pwLow = pw?.currentValue("power") < 100 // below 100 watts we assume there's no AC compression nor resistor heat running
+                boolean timeIsUpOff = timeElapsedSinceLastOff > threshold
+                def pwVal = pw?.currentValue("power")
+                boolean pwLow = pwVal < 100 // below 100 watts we assume there's no AC compression nor resistor heat running
+                boolean timeToRefreshMeters = need == "off" ? timeElapsedSinceLastOff > 10000 && !pwLow : timeElapsedSinceLastResend > 10000 && pwLow
                 logging("time since last Resend Attempt = ${timeElapsedSinceLastResend/1000} seconds & threshold = ${threshold/1000}sec")
                 logging("time since last OFF Attempt = ${timeElapsedSinceLastOff/1000} seconds & threshold = ${30}sec")
 
-                if(timeIsUp && pwLow && need != "off")
+                if(timeToRefreshMeters) // make sure to attempt a refresh before sending more commands
+                {
+                    descriptionText "pwLow = $pwLow refreshing $pw because power is $pwVal while it should be ${need == "off" ? "below 100 Watts":"above 100 Watts"}"
+                    pollPowerMeters()
+                }
+                else if(timeIsUp && pwLow && need != "off")
                 {
                     descriptionText "$app.label is resending ${cmd}(${target}) due to inconsistency in power value"
-                    atomicState.resendAttempt = now() as long
-                        atomicState.setpointSentByApp = true
+                    atomicState.resendAttempt = now() 
+                    atomicState.setpointSentByApp = true
                     thermostat."${cmd}"(target) // resend cmd
+                    pollPowerMeters()
                 }
                 else if(timeIsUpOff && need == "off" && !pwLow && !doorsContactsAreOpen())
                 {
                     log.warn("$thermostat should be off but still draining power, resending cmd")
-                    atomicState.offAttempt = now() as long
-                        thermostat.setThermostatMode("off")
+                    atomicState.offAttempt = now() 
+                    thermostat.setThermostatMode("off")
+                    atomicState.offAttempt = now()
                     thermostat.off()
-                    runIn(10, toggleRelatedSwitch, [data:"off"])
+                    //runIn(10, toggleRelatedSwitch, [data:"off"])
+                    pollPowerMeters()
                 }
                 else if((!pwLow &&  need in ["heat", "cool"]) || (need == "off" && pwLow))
                 {
@@ -1717,7 +1737,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
             /****************END OF HEAT PUMP AND POWER MANAGEMENT FUNCTIONS *************************/
 
             /****************FAN CIRCULATION MANAGEMENT*************************/
-            if(fan && motionActive) // only if motion active. If user wants it to run in no motion state, then this will be taken care of later down
+            if(fan && motionActive && need == "cool") // only if motion active and cooling. If user wants it to run in no motion state, then this will be taken care of later down
             {
                 def fanCmd = neverTurnOff ? "on" : fanWhenCoolingOnly && need == "cool" ? "on" : fanWhenHeatingOnly && need == "heat" ? "on" : "off" 
 
@@ -1739,8 +1759,8 @@ location.mode in silenceMode
                 boolean keepOnWindows = keepFanOnWhenWindowsOpen && !contactClosed
                 boolean keepFandDimmerCoolerOutside = keepFanDimmerOnIfOutsideLowerThanInside && outside < inside && inside > 74
 
-                def dimmerValue = need in ["cool", "heat"] || neverTurnOffFanDimmer || keepOnWindows ? inside >= target + 4 || outside >= 85 ? maxFanSpeed : inside >= target + 2 ? mediumFanSpeed : lowFanSpeed : 0  
-                dimmerValue = keepFandDimmerCoolerOutside ? 100 : dimmerValue
+                def dimmerValue = need in ["cool", "heat"] || neverTurnOffFanDimmer || (keepOnWindows && atomiState.lastNeed != "heat") ? inside >= target + 4 || outside >= 85 ? maxFanSpeed : inside >= target + 2 ? mediumFanSpeed : lowFanSpeed : 0  
+                dimmerValue = keepFandDimmerCoolerOutside ? maxFanSpeed : dimmerValue
                 dimmerValue = location.mode in silenceMode ? silenceValue : dimmerValue
                 if(fanDimmer.currentValue("level") != dimmerValue) fanDimmer?.setLevel(dimmerValue)
                 descriptionText "$fanDimmer running at ${fanDimmer.currentValue("level")}%"
@@ -1847,7 +1867,7 @@ This should not be affecting your input values (your target temperature)"""
                     log.warn formatText(m, "red", "white")
 
                     // if(!atomicState.setPointOverride)     
-                    toggleRelatedSwitch("on") // make sure the power plug, if any, is turned on since this is an emergency heating/cooling 
+                    //toggleRelatedSwitch("on") // make sure the power plug, if any, is turned on since this is an emergency heating/cooling 
 
                     def temporarySetpoint = need == "cool" ? 62 : need == "heat" ? 85 : 72 // 72 if by any chance this went wrong
                     def currCSP = thermostat.currentValue("coolingSetpoint")
@@ -1902,7 +1922,6 @@ This should not be affecting your input values (your target temperature)"""
             // if forececommand true and need is not off make sure we're not under heat pump cold conditions 
             forceCommand = forceCommand && need != "off" ? !heatpumpConditionsTrue : forceCommand // if need = off then apply forcecommand functions to make sure to turn it off
 
-
             if(!atomicState.setPointOverride && thermMode != need || forceCommand && contactClosed)
             {
                 if(forceCommand && OperatingStateOk) {logging "FORCING CMD TO DEVICE BECAUSE temperature difference is TOO HIGH"}
@@ -1912,7 +1931,15 @@ This should not be affecting your input values (your target temperature)"""
                 if(atomicState.forceAttempts >= forceLimit) { runIn(1800, resetCmdForce)} // after 5 attempts, stop and retry in half an hour to prevent z-wave cmds overflow onto the device
 
                 //atomicState.lastSetTime =  5 * 60 * 1000 + 1 // for TESTS ONLY
-                //log.warn "preferCooler ? $preferCooler && outside < preferCoolerLimitTemperature =  $outside < $preferCoolerLimitTemperature"
+                logging """
+preferCooler ? $preferCooler && outside < preferCoolerLimitTemperature =  $outside < $preferCoolerLimitTemperature
+need != "off" || forceCommand || (need == "off" && (sensor || offrequiredbyuser)) = ${need != "off" || forceCommand || (need == "off" && (sensor || offrequiredbyuser))}
+need == "cool" && preferCooler && (outside < preferCoolerLimitTemperature || !preferCoolerLimitTemperature) = ${need == "cool" && preferCooler && (outside < preferCoolerLimitTemperature || !preferCoolerLimitTemperature)}
+thermMode = $thermMode
+need = $need
+thermMode != need = ${thermMode != need}
+"""
+
 
                 if(need != "off" || forceCommand || (need == "off" && (sensor || offrequiredbyuser)))
                 {                
@@ -1926,7 +1953,7 @@ This should not be affecting your input values (your target temperature)"""
                         }
                         else {
                             if(thermMode != need){
-                                thermostat.setThermostatMode(need) // set target mode
+                                thermostat.setThermostatMode(need) // set needed mode
                             }
                             else 
                             {
@@ -1942,7 +1969,7 @@ This should not be affecting your input values (your target temperature)"""
                             //during conditions that might have been uncounted for, like during shoulder season
                         }
 
-                        logging("THERMOSTAT SET TO $need mode (587gf)")
+                        logging "THERMOSTAT SET TO $need mode (587gf)"
                     }
                     else if(now() - atomicState.lastSetTime < 30 * 60 * 1000)
                     {
@@ -1963,7 +1990,7 @@ This should not be affecting your input values (your target temperature)"""
             }
             else if(need != "off" && contactClosed)
             {
-                logging("Thermostat already set to $need mode")
+                descriptionText "Thermostat already set to $need"
             }
 
             //log.trace "atomicState.setPointOverride = $atomicState.setPointOverride"
@@ -1973,6 +2000,7 @@ This should not be affecting your input values (your target temperature)"""
                 {
                     atomicState.setpointSentByApp = true
                     thermostat."${cmd}"(target)   // set target temp
+                    atomicState.resendAttempt = now() // needs to be updated here otherwise it'll resend immediately after since last one was long ago at this point
                     logging("THERMOSTAT SET TO $target (564fdevrt)")
                 }
                 else if(need != "off" && !thermTempDiscrepancy)
@@ -2000,19 +2028,20 @@ This should not be affecting your input values (your target temperature)"""
     }
 }
 def checkEfficiency(coolerNotEfficientEnough, boost, thermMode){
-    
-    
+
+
     log.debug """
 coolerNotEfficientEnough = $coolerNotEfficientEnough
 boost = $boost
 thermMode = $thermMode
 """
-    
+
     if(!coolerNotEfficientEnough && thermMode != "off" && !boost)
     {
         log.debug """preferCooler = true and need = cool
 thermosat kept off ${preferCoolerLimitTemperature ? "unless outside temperature reaches $preferCoolerLimitTemperature":""} 56er"""
         thermostat.setThermostatMode("off")
+        atomicState.offAttempt = now()
     }
     else if(coolerNotEfficientEnough || boost)
     {
@@ -2020,21 +2049,22 @@ thermosat kept off ${preferCoolerLimitTemperature ? "unless outside temperature 
         if(thermMode != "cool")
         {
             thermostat.setThermostatMode("cool") // will run as long as inside > target + efficiencyOffset
+            atomicState.resendAttempt = now()
         }
     }
 }
 def toggleRelatedSwitch(cmd){
-    if(controlpwswitch)
-    {
-        if(pw?.currentValue("switch") != cmd)
-        {
-            pw?."${cmd}"()   
-        }
-        else
-        {
-            descriptionText "$pw already turned $cmd"
-        }
-    }
+    /*if(controlpwswitch)
+{
+if(pw?.currentValue("switch") != cmd)
+{
+pw?."${cmd}"()   
+}
+else
+{
+descriptionText "$pw already turned $cmd"
+}
+}*/
 }
 def sendNotification(){
     def message = "Temperature is too low at $thermostat, antifreeze is now active. Please make sure everything is ok"
@@ -2199,11 +2229,21 @@ outsideTemperature = $outsideTemperature
         boolean tooMuchPower = false
         if(controlPowerConsumption && atomicState.lastNeed == "heat")
         {
-            def pwVal = !pw ? 0 : pw?.currentValue("power")?.toInteger()
-            def heaterVal = !heater ? 0 : heater?.currentValue("power")?.toInteger() 
-            def currentPower = pwVal + heaterVal
-            tooMuchPower = currentPower > maxPowerConsumption.toInteger()
-            tooMuchPower = devicePriority != "$heater" && heatpump && outsideTemperature < lowTemperature ? false : tooMuchPower
+            if(heater?.hasCapability("powerMeter") || heater?.hasAttribute("power"))
+            {
+                def pwVal = !pw ? 0 : pw?.currentValue("power")?.toInteger()
+                def heaterVal = !heater ? 0 : heater?.currentValue("power")?.toInteger()
+                def currentPower = pwVal + heaterVal
+                tooMuchPower = currentPower > maxPowerConsumption.toInteger()
+                tooMuchPower = devicePriority != "$heater" && heatpump && outsideTemperature < lowTemperature ? false : tooMuchPower
+            }
+            else
+            {
+                log.warn "$heater doesn't have power measurement capability"
+                app.updateSetting("controlPowerConsumption", [type:"bool", value:false])
+                tooMuchPower = false
+            }
+
             if(tooMuchPower) 
             {
                 log.trace "both $thermostat and $heater are using too much power but heater needs to stay on due to outside temperature being too low for the heat pump to remain efficient. $thermostat should be off" 
@@ -2249,9 +2289,18 @@ outsideTemperature = $outsideTemperature
         }
         else if(coolerControlPowerConsumption)
         {
-            def currentPower = pw?.currentValue("power").toInteger() + cooler?.currentValue("power").toInteger()
-            tooMuchPower = CurrentPower > coolerMaxPowerConsumption.toInteger()
-            tooMuchPower = coolerDevicePriority != "$cooler" && outsideTemperature > lowTemperature ? false : tooMuchPower
+            if(cooler?.hasCapability("powerMeter") || cooler?.hasAttribute("power"))
+            {
+                def currentPower = pw?.currentValue("power").toInteger() + cooler?.currentValue("power").toInteger()
+                tooMuchPower = CurrentPower > coolerMaxPowerConsumption.toInteger()
+                tooMuchPower = coolerDevicePriority != "$cooler" && outsideTemperature > lowTemperature ? false : tooMuchPower
+            }
+            else
+            {
+                log.warn "$cooler doesn't have power measurement capability"
+                app.updateSetting("coolerControlPowerConsumption", [type:"bool", value:false])
+                tooMuchPower = false
+            }
 
             if(tooMuchPower && coolerDevicePriority != "$cooler") // if thermosat isn't priority it's overriden if high temp outside is true
             {
@@ -2343,7 +2392,7 @@ def windowsControl(target, simpleModeActive, inside, outsideTemperature, humidit
 
         if(INpwSavingMode || !Active())
         {
-            needToOpen = inside >= 74 && outside < inside + 2
+            needToOpen = atomicState.lastNeed = "cool" && inside >= 74 && outside < inside + 2 && !tooHumid
             descriptionText "${needToOpen ? "${windows.join(", ")} open to regulate temp while in power saving mode" : "windows are to remain closed"}"
         }
 
@@ -2451,7 +2500,13 @@ atomicState.widerOpeningDone = $atomicState.widerOpeningDone
                         }
                         need0 = "off"
                         need1 = "off"
-                        thermostat.setThermostatMode("off")
+                        atomicState.lastContactOpenEvt = atomicState.lastContactOpenEvt ? atomicState.lastContactOpenEvt : now()
+                        def delayB4TurningOffThermostat = openDelay ? openDelay * 1000 : 0
+                        if(contactsAreOpen() && now() - atomicState.lastContactOpenEvt > delayB4TurningOffThermostat) 
+                        {
+                            thermostat.setThermostatMode("off")
+                            atomicState.offAttempt = now()
+                        }
                         if(!openMore)
                         {
                             atomicState.lastOpeningTime = now()
@@ -2647,7 +2702,7 @@ problem detected : $problem
             return target // return the default value
         }
     } 
-    descriptionText "target temperature is: $target and current temperature is ${inside}"
+    log.trace "target temperature is: $target and current temperature is ${inside} (swing = $atomicState.swing)"
 
 
     return target
@@ -2703,13 +2758,19 @@ def getNeed(target, simpleModeActive, inside){
     def lo = celsius ? getCelsius(50) : 50
     def hi = celsius ? getCelsius(75) : 75
     def swing = outsideTemperature < lo  || outsideTemperature > hi ? 0.5 : 1 // lower swing when hot or cold outside
+    atomicState.swing = swing
+
     def loCoolSw = celsius ? getCelsius(60) : 60
-    def coolswing = insideHum < loCoolSw ? target + swing : target - swing // if too humid, swing down the threshold when cooling
+    //DEPRECATED FOR NOW def coolswing = insideHum < loCoolSw ? target + swing : target - swing // if too humid, swing down the threshold when cooling
     boolean amplitudeTooHigh = amplitude >= amplThreshold // amplitude between inside temp and target / preventing amplitude paradox during mid-season
 
-    boolean needCool = !simpleModeActive ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= coolswing : outsideTemperature >= outsideThres && inside >= target + swing) : outsideTemperature >= outsideThres + 5 && inside >= target + swing
+    boolean needCool = !simpleModeActive ? (inWindowsModes ? outsideTemperature >= outsideThres && inside >= target + swing : outsideTemperature >= outsideThres && inside >= target + swing) : outsideTemperature >= outsideThres + 5 && inside >= target + swing
+
 
     logging"""
+inside = $inside
+target = $target
+swing = $swing
 outsideTemperature >= outsideThres + 5 = ${outsideTemperature >= outsideThres + 5}
 outsideTemperature = $outsideTemperature
 outsideThres + 5 = ${outsideThres + 5}
@@ -2851,11 +2912,11 @@ inside > criticalcold :  ${inside > criticalcold}
             message = formatText("POWER SAVING MODE ($cause)", "white", "#90ee90")   
         }
 
-        def fanCmd = keepFanOnInNoMotionMode ? "on" : "off"
+        def fanCmd = keepFanOnInNoMotionMode && !motionActive ? "on" : "off" // only when motion is not active, otherwise it'll also turn on when windows are open
         if(fan && fan?.currentValue("switch") != "fanCmd")
         {
-            fan?."${fanCmd}"()
             descriptionText "$fan turned $fanCmd hyr354"
+            fan?."${fanCmd}"()
         }
 
         log.warn message
@@ -2904,9 +2965,7 @@ criticalcold = $criticalcold
 target = $target
 
 swing = $swing
-coolswing = $coolswing
 
-inside > coolswing = ${inside > coolswing}
 inside > target = ${inside > target}
 inside < target = ${inside < target}
 
@@ -2926,13 +2985,6 @@ final NEED value = $need
 </div>
 """, "white", "blue")
 
-
-
-    /*if(contactsAreOpen()){ // always off when contacts are open, period.
-need0 = "off"
-need1 = "off"
-if(thermostat.currentValue("thermostatMode") != "off") thermostat.off()
-}*/
     descriptionText "current need: ${need1 != "off" ? "${need1}ing" : need1} contacts open? ${contactsAreOpen()}"
     need = [need0, need1]
     return need
@@ -3034,7 +3086,7 @@ def getWindowsTimeOfOperation(outsideTemperature, max, min){
     def m = 0.9 // slope / coef
 
     y = m*(x-xa)+ya // solving y-ya = m*(x-xa)
-     
+
     logging """
 y = $y
 max = $max
@@ -3198,6 +3250,7 @@ def getLastMotionEvents(Dtime, testType){
     {
         descriptionText "Sensor still active: ${motionSensors.findAll{it.currentValue("motion") == "active"}}"
         events = 10 // this is not a boolean method but called by a boolean variable
+        if(testType == "motionTest") descriptionText "$atomicState.activeMotionCount active events in the last ${Dtime/1000/60} minutes (atomicState)"
         return events // so we must return a number equal or greater than 1
     }
     /*********************************************************************************************************/
@@ -3206,14 +3259,32 @@ def getLastMotionEvents(Dtime, testType){
     int i = 0
     def thisDeviceEvents = []
     int events = 0
+    //Dtime = 600 * 60 * 1000 
     for(s != 0; i < s; i++) // collect active events
     { 
         def device = motionSensors[i]                
-        thisDeviceEvents = device.eventsSince(new Date(now() - Dtime)).findAll{it.value == "active"} // collect motion events for each sensor separately
-        logging "Collected ${thisDeviceEvents.size()} evts for $device"
-        events += thisDeviceEvents.size() 
+        thisDeviceEvents = device.eventsSince(new Date(now() - Dtime), max).findAll{it.name == "motion" && it.value == "active"} // collect motion events for each sensor separately
+        //log.debug "Collected ${thisDeviceEvents.size()} evts for $device"
+        events += thisDeviceEvents.size()
+        //log.trace "added ${thisDeviceEvents.size()} events to collection = $events"
     }
-    descriptionText "$events active events in the last ${Dtime/1000/60} minutes ($testType)"
+    // eventsSince() can be messy // hubitat still doesn't acknowledge the issue despite several tickets and screenshots. 
+    atomicState.activeMotionCount = atomicState.activeMotionCount ? atomicState.activeMotionCount : 0
+    if(testType == "motionTest" && now() - atomicState.lastMotionEvent > Dtime && atomicState.activeMotionCount != 0)
+    {
+        atomicState.activeMotionCount = 0 // time is up, reset this variable
+        events = 0
+    }
+    else if(atomicState.activeMotionCount > 0 && testType == "motionTest")
+    {
+        events = atomicState.activeMotionCount
+    }
+    if(events > atomicState.activeMotionCount && testType == "motionTest")
+    {
+        atomicState.activeMotionCount = events
+    }
+
+    descriptionText "$events ${testType == "motionTest" ? "($atomicState.activeMotionCount)":""} active events in the last ${Dtime/1000/60} minutes ($testType)"
     return events
 }
 def getRemainTime(timeLimit, timeStamp){

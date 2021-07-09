@@ -1691,7 +1691,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                 // here we manage possible failure for a thermostat to have received the z-wave/zigbee or http command
                 long timeElapsedSinceLastResend = now() - atomicState.resendAttempt
                 long timeElapsedSinceLastOff = now() - atomicState.offAttempt // when device driver returns state off while in fact signal didn't go through
-                long threshold = 4 * 60 * 1000 // give it 4 minutes to kick in before attempting new request 
+                long threshold = 2 * 60 * 1000 // give power meter 2 minutes to have its power measurement refreshed before attempting new request 
                 boolean timeIsUp = timeElapsedSinceLastResend > threshold
                 boolean timeIsUpOff = timeElapsedSinceLastOff > threshold
                 def pwVal = pw?.currentValue("power")
@@ -1700,7 +1700,7 @@ defaultSafeTemp = $defaultSafeTemp (is this user's criticalcold set temp ? ${cri
                 logging("time since last Resend Attempt = ${timeElapsedSinceLastResend/1000} seconds & threshold = ${threshold/1000}sec")
                 logging("time since last OFF Attempt = ${timeElapsedSinceLastOff/1000} seconds & threshold = ${30}sec")
 
-                if(timeToRefreshMeters) // make sure to attempt a refresh before sending more commands
+                if(timeToRefreshMeters && !timeIsUp && !timeIsUpOff) // make sure to attempt a refresh before sending more commands
                 {
                     descriptionText "pwLow = $pwLow refreshing $pw because power is $pwVal while it should be ${need == "off" ? "below 100 Watts":"above 100 Watts"}"
                     pollPowerMeters()
